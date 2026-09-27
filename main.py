@@ -108,7 +108,6 @@ cursor.execute("""
 """)
 conn.commit()
 
-# Проверка/миграция недостающих колонок
 try:
     cursor.execute("ALTER TABLE users ADD COLUMN last_bonus INTEGER DEFAULT 0")
     conn.commit()
@@ -285,7 +284,7 @@ def callback(call):
             "Отправьте данные через запятую:\n"
             "`Название/Номер, Категория, Цена_UAH, Цена_STARS, Цена_RUB`\n\n"
             "*Пример 1:*\n`+380991234567, 📲 Номера, 150, 200, 350`\n\n"
-            "*Пример 2 (простой):*:\n`TG Премиум 1 мес, 💎 Премиум, 120`", 
+            "*Пример 2 (простой):*\n`TG Премиум 1 мес, 💎 Премиум, 120`", 
             parse_mode="Markdown"
         )
         bot.register_next_step_handler(msg, process_add_item)
@@ -518,7 +517,7 @@ def callback(call):
     elif call.data == "top_up_balance":
         markup = types.InlineKeyboardMarkup()
         b_uah = types.InlineKeyboardButton("💳 UAH (Карта)", callback_data="topup_method_uah")
-        b_stars = types.InlineKeyboardButton("⭐ STARS (Telegram Подарок)", callback_data="topup_method_stars")
+        b_stars = types.InlineKeyboardButton("⭐ STARS (Telegram Звёзды)", callback_data="topup_method_stars")
         b_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
         markup.add(b_uah, b_stars)
         markup.add(b_back)
@@ -543,17 +542,11 @@ def callback(call):
 
     elif call.data == "topup_method_stars":
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="top_up_balance"))
-        
-        msg = bot.edit_message_text(
-            f"⭐ **Пополнение баланса Звёздами (Telegram Gifts)**\n\n"
-            f"Введите количество звёзд, на которое хотите пополнить (например: `50`, `100`, `500`):\n\n"
-            f"📌 Подарки отправляются на аккаунт: **@{GARANT_USERNAME}**", 
+        msg = bot.send_message(
             call.message.chat.id, 
-            call.message.message_id,
-            parse_mode="Markdown",
-            reply_markup=markup
+            "⭐ **Пополнение баланса Звёздами (Telegram Stars)**\n\n"
+            "Введите количество звёзд для пополнения (например: `50` или `100`):", 
+            parse_mode="Markdown"
         )
         bot.register_next_step_handler(msg, process_topup_stars_amount)
 
@@ -600,27 +593,27 @@ def callback(call):
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 
-    # ПОДТВЕРЖДЕНИЕ ОТПРАВКИ ПОДАРКА STARS
+    # ПОДТВЕРЖДЕНИЕ ОПЛАТЫ STARS (ПОЛНОСТЬЮ АНАЛОГИЧНО UAH)
     elif call.data.startswith("paidstars_"):
         payment_id = call.data.split("_", 1)[1]
         cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
         p_row = cursor.fetchone()
-
+        
         if not p_row:
-            bot.send_message(call.message.chat.id, "❌ Заявка не найдена!")
+            bot.send_message(call.message.chat.id, "❌ Счет не найден!")
             return
 
         p_amount, p_status = p_row
 
         if p_status == "completed":
-            bot.send_message(call.message.chat.id, "✅ Эти звёзды уже были зачислены!")
+            bot.send_message(call.message.chat.id, "✅ Этот платеж уже подтвержден!")
             return
 
         bot.edit_message_text(
-            f"⏳ **Заявка на проверку подарка отправлена!**\n\n"
-            f"⭐ Заявлено: **{int(p_amount)} ⭐**\n"
-            f"🆔 ID заявки: `{payment_id}`\n\n"
-            f"Администратор проверит получение подарка на **@{GARANT_USERNAME}** и зачислит баланс.",
+            f"⏳ **Заявка отправлена администратору!**\n\n"
+            f"⭐ Сумма: **{int(p_amount)} ⭐**\n"
+            f"🆔 ID платежа: `{payment_id}`\n\n"
+            "После проверки администратор зачислит звёзды.",
             call.message.chat.id,
             call.message.message_id,
             parse_mode="Markdown"
@@ -628,17 +621,17 @@ def callback(call):
 
         username = f"@{call.from_user.username}" if call.from_user.username else "без username"
         adm_markup = types.InlineKeyboardMarkup()
-        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить (Начислить ⭐)", callback_data=f"admconfirmstars_{payment_id}")
+        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admconfirmstars_{payment_id}")
         btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admreject_{payment_id}")
         adm_markup.add(btn_confirm, btn_reject)
 
         adm_text = (
-            f"🎁 **ЗАЯВКА НА ПОПОЛНЕНИЕ ЗВЁЗДАМИ (GIFT)!**\n\n"
+            f"📥 **Заявка на пополнение STARS!**\n\n"
             f"👤 Покупатель: {call.from_user.first_name} ({username})\n"
             f"🆔 ID пользователя: `{user_id}`\n"
-            f"⭐ Ожидаемый подарок на сумму: **{int(p_amount)} ⭐**\n"
-            f"🧾 ID заявки: `{payment_id}`\n\n"
-            f"📌 **Проверьте получение подарка на @{GARANT_USERNAME}** и нажмите кнопку ниже:"
+            f"⭐ Сумма: **{int(p_amount)} ⭐**\n"
+            f"🧾 ID платежа: `{payment_id}`\n\n"
+            f"📌 Проверьте поступление подарка на **@{GARANT_USERNAME}**"
         )
         try:
             bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
@@ -677,16 +670,16 @@ def callback(call):
 
         p_uid, p_amount, p_status = p_row
         if p_status == "completed":
-            bot.send_message(call.message.chat.id, "⚠️ Эти звёзды уже зачислены!")
+            bot.send_message(call.message.chat.id, "⚠️ Платеж уже обработан!")
             return
 
         cursor.execute("UPDATE payments SET status='completed' WHERE payment_id=?", (payment_id,))
         cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (p_amount, p_uid))
         conn.commit()
 
-        bot.edit_message_text(f"✅ **Подарок подтверждён!** Пользователю `{p_uid}` зачислено **+{int(p_amount)} ⭐**.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"✅ **Оплата #{payment_id} подтверждена!** Зачислено +{int(p_amount)} ⭐.", call.message.chat.id, call.message.message_id)
         try:
-            bot.send_message(p_uid, f"🎉 **Подарок проверен и подтверждён!**\n\n⭐ На ваш баланс зачислено: **+{int(p_amount)} ⭐**", parse_mode="Markdown")
+            bot.send_message(p_uid, f"🎉 **Баланс успешно пополнен!**\n⭐ Вам зачислено **+{int(p_amount)} ⭐**.", parse_mode="Markdown")
         except Exception: pass
 
     elif call.data.startswith("admreject_"):
@@ -703,7 +696,7 @@ def callback(call):
 
         bot.edit_message_text(f"❌ **Заявка #{payment_id} отклонена.**", call.message.chat.id, call.message.message_id)
         try:
-            bot.send_message(p_uid, f"❌ **Заявка на пополнение была отклонена.** Средства/подарок не поступили.", parse_mode="Markdown")
+            bot.send_message(p_uid, f"❌ **Заявка на пополнение была отклонена.**", parse_mode="Markdown")
         except Exception: pass
 
     elif call.data == "change_currency":
@@ -882,6 +875,7 @@ def process_topup_amount(message):
         msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите только число (например: `100` или `250.50`):", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_topup_amount)
 
+# ФУНКЦИЯ ПОПОЛНЕНИЯ ЗВЁЗДАМИ (ТОЧНАЯ КОПИЯ КАРТЫ С @garant_nazarow)
 def process_topup_stars_amount(message):
     if message.text and message.text.startswith('/'):
         return
@@ -889,7 +883,7 @@ def process_topup_stars_amount(message):
     try:
         amount = float(message.text.replace(",", ".").strip())
         if amount <= 0:
-            msg = bot.reply_to(message, "❌ Сумма должна быть больше 0 ⭐.\nВведите количество звёзд ещё раз:")
+            msg = bot.reply_to(message, "❌ Сумма должна быть больше 0 ⭐.\nВведите количество звёзд ещё раз:", parse_mode="Markdown")
             bot.register_next_step_handler(msg, process_topup_stars_amount)
             return
         
@@ -900,23 +894,25 @@ def process_topup_stars_amount(message):
         conn.commit()
 
         markup = types.InlineKeyboardMarkup()
-        btn_paid = types.InlineKeyboardButton("🎁 Я отправил подарок", callback_data=f"paidstars_{payment_id}")
+        btn_paid = types.InlineKeyboardButton("✅ Я оплатил", callback_data=f"paidstars_{payment_id}")
         btn_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
         markup.add(btn_paid)
         markup.add(btn_back)
 
         text = (
-            f"⭐ **Пополнение баланса Звёздами (Telegram Gift)**\n\n"
-            f"💰 Заявленная сумма: **{int(amount)} ⭐**\n\n"
-            f"📌 **Инструкция по пополнению:**\n"
-            f"1. Отправьте Telegram-подарок эквивалентом **{int(amount)} ⭐** на аккаунт гаранта:\n"
-            f"👉 **@{GARANT_USERNAME}**\n\n"
-            f"2. После успешной отправки подарка нажмите кнопку **«🎁 Я отправил подарок»** ниже."
+            f"⭐ **Пополнение баланса #{payment_id}**\n\n"
+            f"⭐ Сумма к оплате: **{int(amount)} ⭐**\n\n"
+            f"📌 **Реквизиты для перевода:**\n"
+            f"👤 Юзернейм: `@{GARANT_USERNAME}`\n\n"
+            "⚠️ **Инструкция:**\n"
+            f"1. Отправьте подарок или звёзды на аккаунт `@{GARANT_USERNAME}`.\n"
+            f"2. Переведите ровно **{int(amount)} ⭐**.\n"
+            "3. После отправки нажмите кнопку **«✅ Я оплатил»** ниже."
         )
         bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
     except ValueError:
-        msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите только целое число (например: `50` или `100`):", parse_mode="Markdown")
+        msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите только число (например: `50` или `100`):", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_topup_stars_amount)
 
 def process_review_text(message, order_id, rating):
