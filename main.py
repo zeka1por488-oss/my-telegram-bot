@@ -483,11 +483,12 @@ def callback(call):
             f"Проверьте входящий перевод на карту `{CARD_NUMBER}` и нажмите кнопку:"
         )
         try:
-            bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup)
+            bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
+            
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 
-    elif call.data.startswith("admconfirm_"):
+        elif call.data.startswith("admconfirm_"):
         if user_id != ADMIN_ID: return
         payment_id = call.data.split("_", 1)[1]
 
