@@ -28,7 +28,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8657141354:AAH_SIZmAGwshiFvbDff_9J8_kNt
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "7408654429"))
 MANAGER_USERNAME = "Nazarow927"
 GIFTS_PROFILE = "@garant_nazarow" # Профиль для приема подарков
-REVIEWS_CHANNEL_ID = ""  # Укажите ID канала отзывов, если есть
+REVIEWS_CHANNEL_ID = ""  
 
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "4400005572759295")
 CARD_HOLDER = "А-Банк / Карта UAH"
@@ -109,7 +109,7 @@ cursor.execute("""
 """)
 conn.commit()
 
-# Проверка/миграция недостающих колонок
+# Проверка недостающих колонок
 try:
     cursor.execute("ALTER TABLE users ADD COLUMN last_bonus INTEGER DEFAULT 0")
     conn.commit()
@@ -176,7 +176,6 @@ def get_admin_keyboard():
     b5 = types.InlineKeyboardButton("📢 Массовая рассылка", callback_data="admin_broadcast")
     b6 = types.InlineKeyboardButton("🎁 Создать промокод", callback_data="admin_create_promo")
     b7 = types.InlineKeyboardButton("📥 Скачать БД", callback_data="admin_download_db")
-    
     markup.add(b1)
     markup.add(b2)
     markup.add(b3, b4)
@@ -884,7 +883,7 @@ def callback(call):
         )
         bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
 
-# ==================== STEP HANDLERS (ОБРАБОТКА ВВОДА) ====================
+# ==================== STEP HANDLERS ====================
 
 def process_topup_amount_uah(message):
     if message.text and message.text.startswith('/'): return
