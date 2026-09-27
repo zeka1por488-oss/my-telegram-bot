@@ -160,6 +160,35 @@ def get_main_menu_keyboard():
     markup.add(btn5, btn6)
     return markup
 
+def send_admin_notification(call, payment_id, p_amount, pay_type):
+    user_id = call.from_user.id
+    username = f"@{call.from_user.username}" if call.from_user.username else "без username"
+    
+    adm_markup = types.InlineKeyboardMarkup()
+    if pay_type == "uah":
+        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admconfirm_uah_{payment_id}")
+        title = "📥 **Заявка на пополнение UAH (Карта)!**"
+        amount_str = f"💰 Сумма: **{p_amount:.2f} грн**"
+    else:
+        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admconfirm_stars_{payment_id}")
+        title = "📥 **Заявка на пополнение STARS!**"
+        amount_str = f"⭐ Сумма: **{int(p_amount)} ⭐**\n📌 Проверьте поступление на **@{GARANT_USERNAME}**"
+
+    btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admreject_{payment_id}")
+    adm_markup.add(btn_confirm, btn_reject)
+
+    adm_text = (
+        f"{title}\n\n"
+        f"👤 Покупатель: {call.from_user.first_name} ({username})\n"
+        f"🆔 ID пользователя: `{user_id}`\n"
+        f"{amount_str}\n"
+        f"🧾 ID платежа: `{payment_id}`"
+    )
+    try:
+        bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
+    except Exception as e:
+        print(f"Ошибка отправки админу: {e}")
+
 # ==================== КОМАНДЫ ====================
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -556,88 +585,38 @@ def callback(call):
         cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
         p_row = cursor.fetchone()
         
-        if not p_row:
-            bot.send_message(call.message.chat.id, "❌ Счет не найден!")
+        if not p_row or p_row[1] == "completed":
+            bot.send_message(call.message.chat.id, "❌ Счет не найден или уже обработан!")
             return
 
-        p_amount, p_status = p_row
-
-        if p_status == "completed":
-            bot.send_message(call.message.chat.id, "✅ Этот платеж уже подтвержден!")
-            return
-
+        p_amount = p_row[0]
         bot.edit_message_text(
             f"⏳ **Заявка отправлена администратору!**\n\n"
             f"💰 Сумма: **{p_amount:.2f} грн**\n"
             f"🆔 ID платежа: `{payment_id}`\n\n"
             "После проверки администратор зачислит средства.",
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown"
+            call.message.chat.id, call.message.message_id, parse_mode="Markdown"
         )
+        send_admin_notification(call, payment_id, p_amount, "uah")
 
-        username = f"@{call.from_user.username}" if call.from_user.username else "без username"
-        adm_markup = types.InlineKeyboardMarkup()
-        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admconfirm_uah_{payment_id}")
-        btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admreject_{payment_id}")
-        adm_markup.add(btn_confirm, btn_reject)
-
-        adm_text = (
-            f"📥 **Заявка на пополнение UAH (Карта)!**\n\n"
-            f"👤 Покупатель: {call.from_user.first_name} ({username})\n"
-            f"🆔 ID пользователя: `{user_id}`\n"
-            f"💰 Сумма: **{p_amount:.2f} грн**\n"
-            f"🧾 ID платежа: `{payment_id}`"
-        )
-        try:
-            bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
-        except Exception as e:
-            print(f"Ошибка отправки админу: {e}")
-
-    # ПОДТВЕРЖДЕНИЕ ОТПРАВКИ STARS
     elif call.data.startswith("paidstars_"):
         payment_id = call.data.split("_", 1)[1]
         cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
         p_row = cursor.fetchone()
 
-        if not p_row:
-            bot.send_message(call.message.chat.id, "❌ Заявка не найдена!")
+        if not p_row or p_row[1] == "completed":
+            bot.send_message(call.message.chat.id, "❌ Заявка не найдена или уже обработана!")
             return
 
-        p_amount, p_status = p_row
-
-        if p_status == "completed":
-            bot.send_message(call.message.chat.id, "✅ Эти звёзды уже были зачислены!")
-            return
-
+        p_amount = p_row[0]
         bot.edit_message_text(
             f"⏳ **Заявка отправлена администратору!**\n\n"
             f"⭐ Сумма: **{int(p_amount)} ⭐**\n"
             f"🆔 ID заявки: `{payment_id}`\n\n"
             f"После проверки администратор зачислит звёзды на ваш баланс.",
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown"
+            call.message.chat.id, call.message.message_id, parse_mode="Markdown"
         )
-
-        username = f"@{call.from_user.username}" if call.from_user.username else "без username"
-        adm_markup = types.InlineKeyboardMarkup()
-        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admconfirm_stars_{payment_id}")
-        btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admreject_{payment_id}")
-        adm_markup.add(btn_confirm, btn_reject)
-
-        adm_text = (
-            f"📥 **Заявка на пополнение STARS!**\n\n"
-            f"👤 Покупатель: {call.from_user.first_name} ({username})\n"
-            f"🆔 ID пользователя: `{user_id}`\n"
-            f"⭐ Сумма: **{int(p_amount)} ⭐**\n"
-            f"🧾 ID платежа: `{payment_id}`\n\n"
-            f"📌 Проверьте поступление звезд/подарка на **@{GARANT_USERNAME}**"
-        )
-        try:
-            bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
-        except Exception as e:
-            print(f"Ошибка отправки админу: {e}")
+        send_admin_notification(call, payment_id, p_amount, "stars")
 
     elif call.data.startswith("admconfirm_"):
         if user_id != ADMIN_ID: return
