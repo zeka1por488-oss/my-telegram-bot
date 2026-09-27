@@ -450,7 +450,7 @@ def callback(call):
         )
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    elif call.data.startswith("done_"):
+        elif call.data.startswith("done_"):
         _, order_id, client_id = call.data.split("_")
         cursor.execute("UPDATE orders SET status='completed' WHERE order_id=?", (order_id,))
         conn.commit()
