@@ -809,7 +809,7 @@ def process_add_item(message):
         parts = [p.strip() for p in message.text.split(",")]
         name = parts[0]
         category = parts[1] if len(parts) > 1 else "🔥 Разное"
-        p_uah = float(parts[2]) if len(parts) > 2 else float(parts[1])
+        p_uah = float(parts[2]) if len(parts) > 3 else float(parts[1])
         p_stars = float(parts[3]) if len(parts) > 3 else p_uah * 1.5
         p_rub = float(parts[4]) if len(parts) > 4 else p_uah * 2.5
         
