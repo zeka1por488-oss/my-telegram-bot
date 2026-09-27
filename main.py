@@ -28,7 +28,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8657141354:AAH_SIZmAGwshiFvbDff_9J8_kNt
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "7408654429"))
 MANAGER_USERNAME = "Nazarow927"
 GARANT_USERNAME = "garant_nazarow"
-REVIEWS_CHANNEL_ID = ""
+REVIEWS_CHANNEL_ID = ""  # Укажите ID канала отзывов (например "-100123456789"), если есть
 
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "4400005572759295")
 CARD_HOLDER = "А-Банк / Карта UAH"
@@ -42,6 +42,7 @@ try:
 except Exception as e:
     print(f"Ошибка получения инфо о боте: {e}")
 
+# ==================== БАЗА ДАННЫХ ====================
 conn = sqlite3.connect("store.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -107,6 +108,7 @@ cursor.execute("""
 """)
 conn.commit()
 
+# Проверка/миграция недостающих колонок
 try:
     cursor.execute("ALTER TABLE users ADD COLUMN last_bonus INTEGER DEFAULT 0")
     conn.commit()
@@ -131,6 +133,7 @@ REF_REWARDS = {
     "RUB": (7.0, "₽")
 }
 
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 def get_main_menu_text(first_name):
     return (
         f"👋 **Привет, {first_name}!**\n\n"
@@ -157,9 +160,11 @@ def get_main_menu_keyboard():
     markup.add(btn5, btn6)
     return markup
 
+# ==================== КОМАНДЫ ====================
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
+    bot.clear_step_handler_by_chat_id(chat_id=message.chat.id)
     
     cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
     existing_user = cursor.fetchone()
@@ -201,6 +206,7 @@ def start(message):
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
+    bot.clear_step_handler_by_chat_id(chat_id=message.chat.id)
     if message.from_user.id != ADMIN_ID:
         bot.send_message(message.chat.id, f"❌ Отказано в доступе. Ваш ID: `{message.from_user.id}`", parse_mode="Markdown")
         return
@@ -221,6 +227,37 @@ def admin_panel(message):
     text = "🛠 **Панель Администратора**\n\nУправляйте магазином с помощью кнопок ниже:"
     bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
+@bot.message_handler(commands=['broadcast'])
+def broadcast_command(message):
+    if message.from_user.id != ADMIN_ID: return
+    bot.clear_step_handler_by_chat_id(chat_id=message.chat.id)
+    msg = bot.send_message(message.chat.id, "📢 **Массовая рассылка**\n\nОтправьте сообщение для рассылки:", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, process_broadcast)
+
+@bot.message_handler(commands=['add_promo'])
+def add_promo_command(message):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        _, code, reward, uses = message.text.split()
+        cursor.execute("INSERT OR REPLACE INTO promocodes (code, reward, uses_left) VALUES (?, ?, ?)", 
+                       (code, float(reward), int(uses)))
+        conn.commit()
+        bot.reply_to(message, f"✅ Промокод `{code}` на **{reward}** ({uses} активаций) создан!", parse_mode="Markdown")
+    except Exception:
+        bot.reply_to(message, "Формат: `/add_promo КОД СУММА КОЛ_ВО`\nПример: `/add_promo START100 100 5`", parse_mode="Markdown")
+
+@bot.message_handler(commands=['give_balance'])
+def give_balance(message):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        _, target_id, amount = message.text.split()
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (float(amount), int(target_id)))
+        conn.commit()
+        bot.reply_to(message, f"💰 Выдано **{amount}** пользователю `{target_id}`.", parse_mode="Markdown")
+    except Exception:
+        bot.reply_to(message, "Формат: `/give_balance ID СУММА`", parse_mode="Markdown")
+
+# ==================== CALLBACK HANDLER ====================
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
     bot.answer_callback_query(call.id)
@@ -241,6 +278,7 @@ def callback(call):
         if user_id != ADMIN_ID:
             bot.send_message(call.message.chat.id, "❌ Вы не администратор!")
             return
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
         msg = bot.send_message(
             call.message.chat.id, 
             "➕ **Добавление товара / номера**\n\n"
@@ -253,7 +291,7 @@ def callback(call):
         bot.register_next_step_handler(msg, process_add_item)
         return
 
-    if call.data == "daily_bonus":
+    elif call.data == "daily_bonus":
         now = int(time.time())
         cooldown = 86400
         
@@ -441,6 +479,7 @@ def callback(call):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⏭ Пропустить отзыв", callback_data=f"skip_rev_{order_id}_{rating}"))
 
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
         msg = bot.edit_message_text(
             f"⭐️ Вы поставили оценку **{rating}/5 ⭐**.\n\n"
             f"✍️ **Напишите краткий отзыв о покупке** (или нажмите кнопку «Пропустить»):",
@@ -493,6 +532,7 @@ def callback(call):
         )
 
     elif call.data == "topup_method_uah":
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
         msg = bot.send_message(
             call.message.chat.id, 
             "💳 **Пополнение баланса картой (UAH / грн)**\n\n"
@@ -502,6 +542,7 @@ def callback(call):
         bot.register_next_step_handler(msg, process_topup_amount)
 
     elif call.data == "topup_method_stars":
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
         msg = bot.send_message(
             call.message.chat.id, 
             "⭐ **Пополнение баланса Звёздами (Telegram Gifts)**\n\n"
@@ -620,7 +661,6 @@ def callback(call):
             bot.send_message(p_uid, f"🎉 **Баланс успешно пополнен!**\n💰 Вам зачислено **+{p_amount:.2f} грн**.", parse_mode="Markdown")
         except Exception: pass
 
-    # АДМИН ПОДТВЕРЖДАЕТ ЗВЁЗДЫ
     elif call.data.startswith("admconfirmstars_"):
         if user_id != ADMIN_ID: return
         payment_id = call.data.split("_", 1)[1]
@@ -727,6 +767,7 @@ def callback(call):
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "use_promo":
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
         msg = bot.send_message(call.message.chat.id, "🎁 **Введите промокод:**", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_promo_activation)
 
@@ -759,6 +800,7 @@ def callback(call):
 
     elif call.data == "admin_broadcast":
         if user_id != ADMIN_ID: return
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
         msg = bot.send_message(call.message.chat.id, "📢 **Массовая рассылка**\n\nОтправьте сообщение для рассылки:", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_broadcast)
 
@@ -793,11 +835,16 @@ def callback(call):
         if user_id != ADMIN_ID: return
         bot.send_message(call.message.chat.id, "🎁 Чтобы создать промокод, отправьте команду:\n`/add_promo КОД СУММА КОЛИЧЕСТВО`\n\n*Пример:* `/add_promo BONUS50 50 10`", parse_mode="Markdown")
 
+# ==================== STEP HANDLERS (ОБРАБОТКА ВВОДА) ====================
 def process_topup_amount(message):
+    if message.text and message.text.startswith('/'):
+        return
+
     try:
         amount = float(message.text.replace(",", ".").strip())
         if amount < 10:
-            bot.reply_to(message, "❌ Минимальная сумма пополнения: **10 грн**.", parse_mode="Markdown")
+            msg = bot.reply_to(message, "❌ Минимальная сумма пополнения: **10 грн**.\nВведите сумму ещё раз:", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_topup_amount)
             return
         
         user_id = message.from_user.id
@@ -826,13 +873,18 @@ def process_topup_amount(message):
         bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
     except ValueError:
-        bot.reply_to(message, "❌ **Ошибка ввода!** Введите только число (например: `100` или `250.50`).", parse_mode="Markdown")
+        msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите только число (например: `100` или `250.50`):", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_topup_amount)
 
 def process_topup_stars_amount(message):
+    if message.text and message.text.startswith('/'):
+        return
+
     try:
         amount = float(message.text.replace(",", ".").strip())
         if amount <= 0:
-            bot.reply_to(message, "❌ Сумма должна быть больше 0 ⭐.", parse_mode="Markdown")
+            msg = bot.reply_to(message, "❌ Сумма должна быть больше 0 ⭐.\nВведите количество звёзд ещё раз:")
+            bot.register_next_step_handler(msg, process_topup_stars_amount)
             return
         
         user_id = message.from_user.id
@@ -858,7 +910,8 @@ def process_topup_stars_amount(message):
         bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
     except ValueError:
-        bot.reply_to(message, "❌ **Ошибка ввода!** Введите целое число звёзд (например: `50` или `100`).", parse_mode="Markdown")
+        msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите только целое число (например: `50` или `100`):", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_topup_stars_amount)
 
 def process_review_text(message, order_id, rating):
     text = message.text if message.text else "Без текстового отзыва"
@@ -985,38 +1038,8 @@ def process_promo_activation(message):
 
     bot.reply_to(message, f"🎉 **Промокод активирован!** Вам зачислено **{reward:.2f}** на баланс.", parse_mode="Markdown")
 
-@bot.message_handler(commands=['broadcast'])
-def broadcast_command(message):
-    if message.from_user.id != ADMIN_ID: return
-    msg = bot.send_message(message.chat.id, "📢 **Массовая рассылка**\n\nОтправьте сообщение для рассылки:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, process_broadcast)
-
-@bot.message_handler(commands=['add_promo'])
-def add_promo_command(message):
-    if message.from_user.id != ADMIN_ID: return
-    try:
-        _, code, reward, uses = message.text.split()
-        cursor.execute("INSERT OR REPLACE INTO promocodes (code, reward, uses_left) VALUES (?, ?, ?)", 
-                       (code, float(reward), int(uses)))
-        conn.commit()
-        bot.reply_to(message, f"✅ Промокод `{code}` на **{reward}** ({uses} активаций) создан!", parse_mode="Markdown")
-    except:
-        bot.reply_to(message, "Формат: `/add_promo КОД СУММА КОЛ_ВО`\nПример: `/add_promo START100 100 5`", parse_mode="Markdown")
-
-@bot.message_handler(commands=['give_balance'])
-def give_balance(message):
-    if message.from_user.id != ADMIN_ID: return
-    try:
-        _, target_id, amount = message.text.split()
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (float(amount), int(target_id)))
-        conn.commit()
-        bot.reply_to(message, f"💰 Выдано **{amount}** пользователю `{target_id}`.", parse_mode="Markdown")
-    except:
-        bot.reply_to(message, "Формат: `/give_balance ID СУММА`", parse_mode="Markdown")
-
-# ==================== ЗАПУСК БОТА С WEBSERVER ====================
-if __name__ == "__main__":
-    print("Запуск Flask-сервера для UptimeRobot...")
+# ==================== ЗАПУСК БОТАИ СЕРВЕРА ====================
+if __name__ == '__main__':
     keep_alive()
-    print("Бот успешно запущен!")
-    bot.infinity_polling() 
+    print("🤖 Бот запущен и готов к работе!")
+    bot.infinity_polling(timeout=60, long_polling_timeout=30) 
