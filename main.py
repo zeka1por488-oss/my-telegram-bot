@@ -482,16 +482,12 @@ def callback(call):
             f"🧾 ID платежа: `{payment_id}`\n\n"
             f"Проверьте входящий перевод на карту `{CARD_NUMBER}` и нажмите кнопку:"
         )
-            try:
-            bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
-        except Exception as e:
-            print(f"Ошибка отправки админу: {e}")
-            
+        bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
 
-            elif call.data.startswith("admconfirm_"):
+        elif call.data.startswith("admconfirm_"):
+            if user_id != ADMIN_ID: return
+            payment_id = call.data.split("_", 1)[1]
         
-        if user_id != ADMIN_ID: return
-        payment_id = call.data.split("_", 1)[1]
 
         cursor.execute("SELECT user_id, amount, status FROM payments WHERE payment_id=?", (payment_id,))
         p_row = cursor.fetchone()
