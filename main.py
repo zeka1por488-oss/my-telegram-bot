@@ -103,6 +103,7 @@ cursor.execute("""
         payment_id TEXT PRIMARY KEY,
         user_id INTEGER,
         amount REAL,
+        method TEXT DEFAULT 'uah',
         status TEXT DEFAULT 'pending'
     )
 """)
@@ -117,6 +118,12 @@ except Exception:
 
 try:
     cursor.execute("ALTER TABLE catalog_items ADD COLUMN category TEXT DEFAULT '🔥 Разное'")
+    conn.commit()
+except Exception:
+    pass
+
+try:
+    cursor.execute("ALTER TABLE payments ADD COLUMN method TEXT DEFAULT 'uah'")
     conn.commit()
 except Exception:
     pass
@@ -545,7 +552,7 @@ def callback(call):
         )
         
         sent_msg = bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
-        bot.register_next_step_handler(sent_msg, process_topup_amount)
+        bot.register_next_step_handler(sent_msg, process_topup_amount_uah)
 
     elif call.data == "topup_method_stars":
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
@@ -554,32 +561,52 @@ def callback(call):
         markup.add(types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile"))
 
         text = (
-            f"🎁 **Пополнение баланса через Подарки (Star Gifts)**\n\n"
-            f"1. Перейдите в профиль: **{GIFTS_PROFILE}**\n"
-            f"2. Отправьте подарок на нужную сумму.\n"
-            f"3. В комментарии к подарку **обязательно** укажите ваш ID: `{user_id}`\n\n"
-            f"📸 **Отправьте скриншот подтверждения (или текстовое сообщение) прямо в этот чат:**"
+            f"🎁 **Пополнение баланса через Подарки (Stars)**\n\n"
+            f"Введите количество **⭐ звёзд**, на которое хотите пополнить баланс (например: `50` или `100`):"
         )
         
         sent_msg = bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
-        bot.register_next_step_handler(sent_msg, process_gift_proof)
+        bot.register_next_step_handler(sent_msg, process_topup_amount_stars)
 
-    # Админские кнопки для подарков
-    elif call.data.startswith("admgift_approve_"):
+    # Админские кнопки для подтверждения/отказа пополнения звезд
+    elif call.data.startswith("admgift_confirm_"):
         if user_id != ADMIN_ID: return
-        target_uid = int(call.data.split("_")[2])
-        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
-        msg = bot.send_message(call.message.chat.id, f"💰 Введите количество звёзд для зачисления пользователю `{target_uid}`:", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, process_admin_gift_amount, target_uid)
+        payment_id = call.data.split("_", 2)[2]
+
+        cursor.execute("SELECT user_id, amount, status FROM payments WHERE payment_id=?", (payment_id,))
+        p_row = cursor.fetchone()
+        if not p_row: return
+
+        p_uid, p_amount, p_status = p_row
+        if p_status == "completed":
+            bot.send_message(call.message.chat.id, "⚠️ Платеж уже обработан!")
+            return
+
+        cursor.execute("UPDATE payments SET status='completed' WHERE payment_id=?", (payment_id,))
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (p_amount, p_uid))
+        conn.commit()
+
+        bot.edit_message_text(f"✅ **Оплата подарком #{payment_id} подтверждена!** Зачислено +{p_amount} ⭐.", call.message.chat.id, call.message.message_id)
+        try:
+            bot.send_message(p_uid, f"🎉 **Баланс успешно пополнен!**\n💰 Вам зачислено **+{p_amount} ⭐**.", parse_mode="Markdown")
+        except Exception: pass
 
     elif call.data.startswith("admgift_reject_"):
         if user_id != ADMIN_ID: return
-        target_uid = int(call.data.split("_")[2])
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-        bot.send_message(call.message.chat.id, f"❌ Заявка пользователя `{target_uid}` отклонена.")
+        payment_id = call.data.split("_", 2)[2]
+
+        cursor.execute("SELECT user_id FROM payments WHERE payment_id=?", (payment_id,))
+        p_row = cursor.fetchone()
+        if not p_row: return
+        p_uid = p_row[0]
+
+        cursor.execute("UPDATE payments SET status='rejected' WHERE payment_id=?", (payment_id,))
+        conn.commit()
+
+        bot.edit_message_text(f"❌ **Заявка #{payment_id} отклонена.**", call.message.chat.id, call.message.message_id)
         try:
-            bot.send_message(target_uid, "❌ Ваша заявка на пополнение через Подарок была отклонена администратором.")
-        except: pass
+            bot.send_message(p_uid, f"❌ **Ваша заявка на пополнение через Подарок была отклонена администратором.**", parse_mode="Markdown")
+        except Exception: pass
 
     elif call.data.startswith("paid_"):
         payment_id = call.data.split("_", 1)[1]
@@ -614,6 +641,46 @@ def callback(call):
             f"🆔 ID пользователя: `{user_id}`\n"
             f"💰 Сумма: **{p_amount:.2f} грн**\n"
             f"🧾 ID платежа: `{payment_id}`"
+        )
+        try:
+            bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
+        except Exception as e:
+            print(f"Ошибка отправки админу: {e}")
+
+    elif call.data.startswith("paid_stars_"):
+        payment_id = call.data.split("_", 2)[2]
+        cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
+        p_row = cursor.fetchone()
+        if not p_row: return
+
+        p_amount, p_status = p_row
+        if p_status == "completed":
+            bot.send_message(call.message.chat.id, "✅ Этот платеж уже подтвержден!")
+            return
+
+        bot.edit_message_text(
+            f"⏳ **Заявка на пополнение звёздами отправлена!**\n\n"
+            f"💎 Сумма: **{int(p_amount)} ⭐**\n"
+            f"🆔 ID заявки: `{payment_id}`\n\n"
+            "Администратор проверяет отправку подарка.",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+
+        username = f"@{call.from_user.username}" if call.from_user.username else "без username"
+        adm_markup = types.InlineKeyboardMarkup()
+        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admgift_confirm_{payment_id}")
+        btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admgift_reject_{payment_id}")
+        adm_markup.add(btn_confirm, btn_reject)
+
+        adm_text = (
+            f"📥 **Заявка на пополнение Stars (Подарок)!**\n\n"
+            f"👤 Пользователь: {call.from_user.first_name} ({username})\n"
+            f"🆔 ID: `{user_id}`\n"
+            f"💎 Сумма: **{int(p_amount)} ⭐**\n"
+            f"🧾 ID заявки: `{payment_id}`\n"
+            f"📌 Профиль для приема: {GIFTS_PROFILE}"
         )
         try:
             bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
@@ -788,62 +855,19 @@ def callback(call):
 
 # ==================== STEP HANDLERS (ОБРАБОТКА ВВОДА) ====================
 
-def process_gift_proof(message):
-    if message.text and message.text.startswith('/'): return
-    user_id = message.from_user.id
-    username = f"@{message.from_user.username}" if message.from_user.username else "без username"
-
-    markup = types.InlineKeyboardMarkup()
-    b1 = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admgift_approve_{user_id}")
-    b2 = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admgift_reject_{user_id}")
-    markup.add(b1, b2)
-
-    admin_text = (
-        f"📥 **Новая заявка на пополнение (Подарок)!**\n\n"
-        f"👤 От: {message.from_user.first_name} ({username})\n"
-        f"🆔 ID: `{user_id}`\n"
-        f"📌 Проверьте получение подарка в профиле {GIFTS_PROFILE}"
-    )
-
-    try:
-        if message.photo:
-            bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=admin_text, parse_mode="Markdown", reply_markup=markup)
-        else:
-            bot.send_message(ADMIN_ID, f"{admin_text}\n\n💬 Текст заявки: {message.text}", parse_mode="Markdown", reply_markup=markup)
-        
-        bot.reply_to(message, "✅ **Заявка отправлена администратору!**\nОжидайте зачисления баланса после проверки.")
-    except Exception as e:
-        bot.reply_to(message, "❌ Ошибка при отправке заявки администратору.")
-
-def process_admin_gift_amount(message, target_uid):
-    if message.from_user.id != ADMIN_ID: return
-    try:
-        amount = float(message.text.replace(",", ".").strip())
-        
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, target_uid))
-        conn.commit()
-
-        bot.reply_to(message, f"✅ Успешно начислено **{amount} ⭐** пользователю `{target_uid}`.", parse_mode="Markdown")
-        try:
-            bot.send_message(target_uid, f"🎉 **Заявка одобрена!**\nНа ваш баланс зачислено **{amount} ⭐** за отправленный подарок!", parse_mode="Markdown")
-        except Exception: pass
-    except ValueError:
-        msg = bot.reply_to(message, "❌ Ошибка! Введите числовое значение.")
-        bot.register_next_step_handler(msg, process_admin_gift_amount, target_uid)
-
-def process_topup_amount(message):
+def process_topup_amount_uah(message):
     if message.text and message.text.startswith('/'): return
     try:
         amount = float(message.text.replace(",", ".").strip())
         if amount < 10:
             msg = bot.reply_to(message, "❌ Минимальная сумма пополнения: **10 грн**.\nВведите сумму ещё раз:", parse_mode="Markdown")
-            bot.register_next_step_handler(msg, process_topup_amount)
+            bot.register_next_step_handler(msg, process_topup_amount_uah)
             return
         
         user_id = message.from_user.id
         payment_id = f"pay_{user_id}_{int(time.time())}"
 
-        cursor.execute("INSERT INTO payments (payment_id, user_id, amount) VALUES (?, ?, ?)", (payment_id, user_id, amount))
+        cursor.execute("INSERT INTO payments (payment_id, user_id, amount, method) VALUES (?, ?, ?, 'uah')", (payment_id, user_id, amount))
         conn.commit()
 
         markup = types.InlineKeyboardMarkup()
@@ -866,7 +890,41 @@ def process_topup_amount(message):
         bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
     except ValueError:
         msg = bot.reply_to(message, "❌ Введите число (например: `100`):", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, process_topup_amount)
+        bot.register_next_step_handler(msg, process_topup_amount_uah)
+
+def process_topup_amount_stars(message):
+    if message.text and message.text.startswith('/'): return
+    try:
+        amount = float(message.text.replace(",", ".").strip())
+        if amount < 1:
+            msg = bot.reply_to(message, "❌ Минимальная сумма: **1 ⭐**.\nВведите количество звезд ещё раз:", parse_mode="Markdown")
+            bot.register_next_step_handler(msg, process_topup_amount_stars)
+            return
+        
+        user_id = message.from_user.id
+        payment_id = f"gift_{user_id}_{int(time.time())}"
+
+        cursor.execute("INSERT INTO payments (payment_id, user_id, amount, method) VALUES (?, ?, ?, 'stars')", (payment_id, user_id, amount))
+        conn.commit()
+
+        markup = types.InlineKeyboardMarkup()
+        btn_paid = types.InlineKeyboardButton("✅ Я отправил подарок", callback_data=f"paid_stars_{payment_id}")
+        btn_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
+        markup.add(btn_paid)
+        markup.add(btn_back)
+
+        text = (
+            f"🎁 **Пополнение через Подарок (Stars) #{payment_id}**\n\n"
+            f"💎 Сумма: **{int(amount)} ⭐**\n\n"
+            f"📌 **Инструкция:**\n"
+            f"1. Перейдите в профиль для приема подарков: **{GIFTS_PROFILE}**\n"
+            f"2. Отправьте подарок на сумму **{int(amount)} ⭐**.\n"
+            f"3. Нажмите кнопку **«✅ Я отправил подарок»** ниже."
+        )
+        bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
+    except ValueError:
+        msg = bot.reply_to(message, "❌ Введите число (например: `50`):", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_topup_amount_stars)
 
 def process_admin_find_user(message):
     if message.from_user.id != ADMIN_ID: return
