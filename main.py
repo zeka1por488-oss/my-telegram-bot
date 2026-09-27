@@ -472,8 +472,7 @@ def callback(call):
         adm_markup = types.InlineKeyboardMarkup()
         btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admconfirm_{payment_id}")
         btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admreject_{payment_id}")
-        adm_markup.add(btn_confirm, btn_reject)
-
+        adm_markup.add(btn_confirm, btn_reje
         adm_text = (
             f"📥 **Заявка на пополнение баланса!**\n\n"
             f"👤 Покупатель: {call.from_user.first_name} ({username})\n"
@@ -484,11 +483,11 @@ def callback(call):
         )
         try:
             bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
-            
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 
         elif call.data.startswith("admconfirm_"):
+        
         if user_id != ADMIN_ID: return
         payment_id = call.data.split("_", 1)[1]
 
