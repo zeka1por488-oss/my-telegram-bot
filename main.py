@@ -201,6 +201,7 @@ def start(message):
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.from_user.id != ADMIN_ID:
+        bot.send_message(message.chat.id, f"❌ Отказано в доступе. Ваш ID: `{message.from_user.id}`", parse_mode="Markdown")
         return
     
     markup = types.InlineKeyboardMarkup()
@@ -221,6 +222,7 @@ def admin_panel(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
+    bot.answer_callback_query(call.id)
     user_id = call.from_user.id
     
     cursor.execute("SELECT balance, currency, last_bonus FROM users WHERE user_id=?", (user_id,))
@@ -233,6 +235,22 @@ def callback(call):
         balance, curr, last_bonus = u_row[0], u_row[1], u_row[2]
 
     sym = CURRENCY_SYMBOLS.get(curr, "грн")
+
+    if call.data == "admin_add_item":
+        if user_id != ADMIN_ID:
+            bot.send_message(call.message.chat.id, "❌ Вы не администратор!")
+            return
+        msg = bot.send_message(
+            call.message.chat.id, 
+            "➕ **Добавление товара**\n\n"
+            "Отправьте данные о товаре через запятую:\n"
+            "`Название, Категория, Цена_UAH, Цена_STARS, Цена_RUB`\n\n"
+            "*Пример 1 (все параметры):*\n`SIM Vodafone, 📲 Физ. карты, 150, 200, 350`\n\n"
+            "*Пример 2 (только имя и цена грн):*\n`TG Премиум 1 мес, 💎 Премиум, 120`", 
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, process_add_item)
+        return
 
     if call.data == "daily_bonus":
         now = int(time.time())
@@ -247,8 +265,6 @@ def callback(call):
 
             cursor.execute("UPDATE users SET balance = balance + ?, last_bonus = ? WHERE user_id = ?", (bonus_amount, now, user_id))
             conn.commit()
-            
-            bot.answer_callback_query(call.id, f"🎉 Вы получили бонус: +{bonus_amount} {sym}!", show_alert=True)
             
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("⬅️ Главное меню", callback_data="main_menu"))
@@ -265,9 +281,9 @@ def callback(call):
             time_left = cooldown - (now - last_bonus)
             hours = time_left // 3600
             minutes = (time_left % 3600) // 60
-            bot.answer_callback_query(call.id, f"⏳ Бонус уже получен! Заходите через {hours} ч. {minutes} мин.", show_alert=True)
+            bot.send_message(call.message.chat.id, f"⏳ Бонус уже получен! Заходите через {hours} ч. {minutes} мин.")
 
-    if call.data == "catalog_cats":
+    elif call.data == "catalog_cats":
         cursor.execute("SELECT DISTINCT category FROM catalog_items")
         cats = cursor.fetchall()
         
@@ -282,7 +298,7 @@ def callback(call):
         markup.add(types.InlineKeyboardButton("⬅️ Главное меню", callback_data="main_menu"))
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    if call.data.startswith("cat_"):
+    elif call.data.startswith("cat_"):
         cat_name = call.data.split("_", 1)[1]
         cursor.execute("SELECT id, name, price_uah, price_stars, price_rub FROM catalog_items WHERE category=?", (cat_name,))
         items = cursor.fetchall()
@@ -298,13 +314,13 @@ def callback(call):
         markup.add(types.InlineKeyboardButton("⬅️ К категориям", callback_data="catalog_cats"))
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    if call.data.startswith("item_"):
+    elif call.data.startswith("item_"):
         item_id = call.data.split("_")[1]
         cursor.execute("SELECT name, category, price_uah, price_stars, price_rub FROM catalog_items WHERE id=?", (item_id,))
         item = cursor.fetchone()
         
         if not item:
-            bot.answer_callback_query(call.id, "❌ Товар не найден!", show_alert=True)
+            bot.send_message(call.message.chat.id, "❌ Товар не найден!")
             return
 
         name, cat_name, p_uah, p_stars, p_rub = item
@@ -327,7 +343,7 @@ def callback(call):
         )
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    if call.data == "faq_info":
+    elif call.data == "faq_info":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("💬 Написать менеджеру", url=f"https://t.me/{MANAGER_USERNAME}"))
         markup.add(types.InlineKeyboardButton("⬅️ Главное меню", callback_data="main_menu"))
@@ -345,13 +361,13 @@ def callback(call):
         )
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    if call.data.startswith("req_"):
+    elif call.data.startswith("req_"):
         item_id = call.data.split("_")[1]
         cursor.execute("SELECT name, price_uah, price_stars, price_rub FROM catalog_items WHERE id=?", (item_id,))
         item = cursor.fetchone()
         
         if not item:
-            bot.answer_callback_query(call.id, "❌ Товар не найден!", show_alert=True)
+            bot.send_message(call.message.chat.id, "❌ Товар не найден!")
             return
 
         name, p_uah, p_stars, p_rub = item
@@ -389,7 +405,7 @@ def callback(call):
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 
-    if call.data.startswith("done_"):
+    elif call.data.startswith("done_"):
         _, order_id, client_id = call.data.split("_")
         cursor.execute("UPDATE orders SET status='completed' WHERE order_id=?", (order_id,))
         conn.commit()
@@ -411,7 +427,7 @@ def callback(call):
         except Exception as e:
             print(f"Ошибка отправки клиенту: {e}")
 
-    if call.data.startswith("rate_"):
+    elif call.data.startswith("rate_"):
         _, order_id, rating = call.data.split("_")
         rating = int(rating)
 
@@ -428,13 +444,13 @@ def callback(call):
         )
         bot.register_next_step_handler(msg, process_review_text, order_id, rating)
 
-    if call.data.startswith("skip_rev_"):
+    elif call.data.startswith("skip_rev_"):
         _, _, order_id, rating = call.data.split("_")
         rating = int(rating)
         save_review(order_id, user_id, rating, "Без текстового отзыва", call.from_user.first_name, call.from_user.username)
         bot.edit_message_text("🙏 **Спасибо за вашу оценку!** Нам очень важно ваше мнение.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
-    if call.data == "profile":
+    elif call.data == "profile":
         markup = types.InlineKeyboardMarkup()
         btn_topup = types.InlineKeyboardButton("💳 Пополнить баланс", callback_data="top_up_balance")
         btn_ref = types.InlineKeyboardButton("👥 Реферальная система", callback_data="ref_system")
@@ -452,7 +468,7 @@ def callback(call):
         text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{balance:.2f} {sym}**\n🌐 Выбранная валюта: **{curr}**"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    if call.data == "top_up_balance":
+    elif call.data == "top_up_balance":
         msg = bot.send_message(
             call.message.chat.id, 
             "💳 **Пополнение баланса картой (UAH / грн)**\n\n"
@@ -461,20 +477,20 @@ def callback(call):
         )
         bot.register_next_step_handler(msg, process_topup_amount)
 
-    if call.data.startswith("paid_"):
+    elif call.data.startswith("paid_"):
         payment_id = call.data.split("_", 1)[1]
         
         cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
         p_row = cursor.fetchone()
         
         if not p_row:
-            bot.answer_callback_query(call.id, "❌ Счет не найден!", show_alert=True)
+            bot.send_message(call.message.chat.id, "❌ Счет не найден!")
             return
 
         p_amount, p_status = p_row
 
         if p_status == "completed":
-            bot.answer_callback_query(call.id, "✅ Этот платеж уже подтвержден и зачислен!", show_alert=True)
+            bot.send_message(call.message.chat.id, "✅ Этот платеж уже подтвержден и зачислен!")
             return
 
         bot.edit_message_text(
@@ -506,21 +522,19 @@ def callback(call):
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 
-    if call.data.startswith("admconfirm_"):
+    elif call.data.startswith("admconfirm_"):
         if user_id != ADMIN_ID: return
         payment_id = call.data.split("_", 1)[1]
 
         cursor.execute("SELECT user_id, amount, status FROM payments WHERE payment_id=?", (payment_id,))
         p_row = cursor.fetchone()
 
-        if not p_row:
-            bot.answer_callback_query(call.id, "❌ Пополнение не найдено!", show_alert=True)
-            return
+        if not p_row: return
 
         p_uid, p_amount, p_status = p_row
 
         if p_status == "completed":
-            bot.answer_callback_query(call.id, "⚠️ Этот платеж уже был зачислен ранее!", show_alert=True)
+            bot.send_message(call.message.chat.id, "⚠️ Этот платеж уже был зачислен ранее!")
             return
 
         cursor.execute("UPDATE payments SET status='completed' WHERE payment_id=?", (payment_id,))
@@ -543,7 +557,7 @@ def callback(call):
         except Exception as e:
             print(f"Ошибка отправки пользователю: {e}")
 
-    if call.data.startswith("admreject_"):
+    elif call.data.startswith("admreject_"):
         if user_id != ADMIN_ID: return
         payment_id = call.data.split("_", 1)[1]
 
@@ -563,7 +577,7 @@ def callback(call):
         except Exception:
             pass
 
-    if call.data == "change_currency":
+    elif call.data == "change_currency":
         markup = types.InlineKeyboardMarkup()
         b1 = types.InlineKeyboardButton("🇺🇦 UAH (грн)", callback_data="set_curr_UAH")
         b2 = types.InlineKeyboardButton("⭐ Stars (звёзды)", callback_data="set_curr_STARS")
@@ -573,11 +587,10 @@ def callback(call):
         markup.add(b_back)
         bot.edit_message_text("🌐 **Выберите удобную валюту:**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    if call.data.startswith("set_curr_"):
+    elif call.data.startswith("set_curr_"):
         new_curr = call.data.split("_")[2]
         cursor.execute("UPDATE users SET currency=? WHERE user_id=?", (new_curr, user_id))
         conn.commit()
-        bot.answer_callback_query(call.id, f"✅ Валюта изменена на {new_curr}!", show_alert=True)
         
         cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
         new_bal = cursor.fetchone()[0]
@@ -593,7 +606,7 @@ def callback(call):
         text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{new_bal:.2f} {new_sym}**\n🌐 Выбранная валюта: **{new_curr}**"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    if call.data == "ref_system":
+    elif call.data == "ref_system":
         cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (user_id,))
         ref_count = cursor.fetchone()[0]
         
@@ -612,7 +625,7 @@ def callback(call):
         markup.add(types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile"))
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    if call.data == "my_orders":
+    elif call.data == "my_orders":
         cursor.execute("SELECT order_id, item_name, price, currency, status FROM orders WHERE user_id=? ORDER BY order_id DESC LIMIT 10", (user_id,))
         orders = cursor.fetchall()
         
@@ -630,27 +643,16 @@ def callback(call):
 
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    if call.data == "use_promo":
+    elif call.data == "use_promo":
         msg = bot.send_message(call.message.chat.id, "🎁 **Введите промокод:**", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_promo_activation)
 
-    if call.data == "main_menu":
+    elif call.data == "main_menu":
         text = get_main_menu_text(call.from_user.first_name)
         markup = get_main_menu_keyboard()
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    if call.data == "admin_add_item":
-        if user_id != ADMIN_ID: return
-        msg = bot.send_message(
-            call.message.chat.id, 
-            "➕ **Добавление товара**\n\n"
-            "Введите через запятую: Название, Категория, Цена_UAH, Цена_STARS, Цена_RUB\n\n"
-            "*Пример:*\n`SIM Vodafone, 📲 Физ. карты, 150, 200, 350`", 
-            parse_mode="Markdown"
-        )
-        bot.register_next_step_handler(msg, process_add_item)
-
-    if call.data == "admin_del_item":
+    elif call.data == "admin_del_item":
         if user_id != ADMIN_ID: return
         cursor.execute("SELECT id, name, price_uah, category FROM catalog_items")
         items = cursor.fetchall()
@@ -665,19 +667,19 @@ def callback(call):
 
         bot.send_message(call.message.chat.id, "🗑 **Выберите товар для удаления:**", reply_markup=markup)
 
-    if call.data.startswith("delitem_"):
+    elif call.data.startswith("delitem_"):
         if user_id != ADMIN_ID: return
         item_id = call.data.split("_")[1]
         cursor.execute("DELETE FROM catalog_items WHERE id=?", (item_id,))
         conn.commit()
         bot.edit_message_text("✅ Товар успешно удален из каталога!", call.message.chat.id, call.message.message_id)
 
-    if call.data == "admin_broadcast":
+    elif call.data == "admin_broadcast":
         if user_id != ADMIN_ID: return
         msg = bot.send_message(call.message.chat.id, "📢 **Массовая рассылка**\n\nОтправьте сообщение для рассылки:", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_broadcast)
 
-    if call.data == "admin_stats":
+    elif call.data == "admin_stats":
         if user_id != ADMIN_ID: return
         cursor.execute("SELECT COUNT(*) FROM users")
         total_users = cursor.fetchone()[0]
@@ -700,11 +702,11 @@ def callback(call):
         )
         bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
 
-    if call.data == "admin_give_info":
+    elif call.data == "admin_give_info":
         if user_id != ADMIN_ID: return
         bot.send_message(call.message.chat.id, "💰 Чтобы выдать баланс, отправьте команду:\n`/give_balance ID СУММА`\n\n*Пример:* `/give_balance 7408654429 100`", parse_mode="Markdown")
 
-    if call.data == "admin_promo_info":
+    elif call.data == "admin_promo_info":
         if user_id != ADMIN_ID: return
         bot.send_message(call.message.chat.id, "🎁 Чтобы создать промокод, отправьте команду:\n`/add_promo КОД СУММА КОЛИЧЕСТВО`\n\n*Пример:* `/add_promo BONUS50 50 10`", parse_mode="Markdown")
 
@@ -808,10 +810,15 @@ def process_add_item(message):
     try:
         parts = [p.strip() for p in message.text.split(",")]
         name = parts[0]
-        category = parts[1] if len(parts) > 1 else "🔥 Разное"
-        p_uah = float(parts[2]) if len(parts) > 3 else float(parts[1])
-        p_stars = float(parts[3]) if len(parts) > 3 else p_uah * 1.5
-        p_rub = float(parts[4]) if len(parts) > 4 else p_uah * 2.5
+        
+        if len(parts) == 1:
+            bot.reply_to(message, "❌ Забыли указать хотя бы цену! Пример:\n`Товар, Категория, 100`")
+            return
+            
+        category = parts[1] if len(parts) > 2 else "🔥 Разное"
+        p_uah = float(parts[2]) if len(parts) > 2 else float(parts[1])
+        p_stars = float(parts[3]) if len(parts) > 3 else round(p_uah * 1.5, 1)
+        p_rub = float(parts[4]) if len(parts) > 4 else round(p_uah * 2.5, 2)
         
         cursor.execute("INSERT INTO catalog_items (name, category, price_uah, price_stars, price_rub) VALUES (?, ?, ?, ?, ?)", 
                        (name, category, p_uah, p_stars, p_rub))
@@ -819,17 +826,18 @@ def process_add_item(message):
         
         bot.reply_to(
             message, 
-            f"✅ Товар **{name}** успешно добавлен в категорию **[{category}]**!\n"
-            f"Цены: {p_uah} грн | {p_stars} ⭐ | {p_rub} ₽", 
+            f"✅ Товар **{name}** успешно добавлен!\n\n"
+            f"📂 Категория: **{category}**\n"
+            f"💰 Цены: **{p_uah} грн** | **{p_stars} ⭐** | **{p_rub} ₽**", 
             parse_mode="Markdown"
         )
     except Exception as e:
         print(f"Ошибка добавления товара: {e}")
         bot.reply_to(
             message, 
-            "❌ **Ошибка ввода!** Формат:\n"
-            "`Название, Категория, Цена_UAH, Цена_STARS, Цена_RUB`\n\n"
-            "*Пример:*\n`Vodafone eSIM, 📲 Физ. SIM, 150, 200, 350`", 
+            "❌ **Ошибка формата!** Отправьте вот так:\n"
+            "`Название, Категория, Цена_UAH`\n\n"
+            "*Пример:*\n`TG Premium 1 месяц, 💎 Премиум, 150`", 
             parse_mode="Markdown"
         )
 
