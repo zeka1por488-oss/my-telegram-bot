@@ -262,6 +262,10 @@ def give_balance(message):
 def callback(call):
     bot.answer_callback_query(call.id)
     user_id = call.from_user.id
+
+    # Очищаем обработчики ввода при навигации по кнопкам меню
+    if call.data in ["main_menu", "profile", "catalog_cats", "faq_info", "ref_system"]:
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
     
     cursor.execute("SELECT balance, currency, last_bonus FROM users WHERE user_id=?", (user_id,))
     u_row = cursor.fetchone()
@@ -514,7 +518,6 @@ def callback(call):
         text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{balance:.2f} {sym}**\n🌐 Выбранная валюта: **{curr}**"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # ВЫБОР МЕТОДА ПОПОЛНЕНИЯ БАЛАНСА
     elif call.data == "top_up_balance":
         markup = types.InlineKeyboardMarkup()
         b_uah = types.InlineKeyboardButton("💳 UAH (Карта)", callback_data="topup_method_uah")
@@ -594,7 +597,6 @@ def callback(call):
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 
-    # ПОДТВЕРЖДЕНИЕ ОТПРАВКИ ПОДАРКА STARS
     elif call.data.startswith("paidstars_"):
         payment_id = call.data.split("_", 1)[1]
         cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
@@ -1038,7 +1040,7 @@ def process_promo_activation(message):
 
     bot.reply_to(message, f"🎉 **Промокод активирован!** Вам зачислено **{reward:.2f}** на баланс.", parse_mode="Markdown")
 
-# ==================== ЗАПУСК БОТАИ СЕРВЕРА ====================
+# ==================== ЗАПУСК БОТА И СЕРВЕРА ====================
 if __name__ == '__main__':
     keep_alive()
     print("🤖 Бот запущен и готов к работе!")
