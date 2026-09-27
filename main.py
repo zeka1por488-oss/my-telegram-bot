@@ -535,15 +535,18 @@ def callback(call):
 
     elif call.data == "topup_method_uah":
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
-        msg = bot.send_message(
-            call.message.chat.id, 
-            "💳 **Пополнение баланса картой (UAH / грн)**\n\n"
-            "Введите сумму пополнения в **грн** (например: `100` или `250`):", 
-            parse_mode="Markdown"
-        )
-        bot.register_next_step_handler(msg, process_topup_amount)
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile"))
 
-    # =============== НОВАЯ СИСТЕМА: ПОПОЛНЕНИЕ ПОДАРКАМИ ===============
+        text = (
+            f"💳 **Пополнение баланса картой (UAH / грн)**\n\n"
+            f"Введите сумму пополнения в **грн** (например: `100` или `250`):"
+        )
+        
+        sent_msg = bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
+        bot.register_next_step_handler(sent_msg, process_topup_amount)
+
     elif call.data == "topup_method_stars":
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
         
@@ -577,7 +580,6 @@ def callback(call):
         try:
             bot.send_message(target_uid, "❌ Ваша заявка на пополнение через Подарок была отклонена администратором.")
         except: pass
-    # ===================================================================
 
     elif call.data.startswith("paid_"):
         payment_id = call.data.split("_", 1)[1]
