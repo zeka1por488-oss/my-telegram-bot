@@ -469,7 +469,7 @@ def callback(call):
         )
 
         username = f"@{call.from_user.username}" if call.from_user.username else "без username"
-        adm_markup = types.InlineKeyboardMarkup(row_width=2)
+        adm_markup = types.InlineKeyboardMarkup()
         btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admconfirm_{payment_id}")
         btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admreject_{payment_id}")
         adm_markup.add(btn_confirm, btn_reject)
@@ -482,12 +482,14 @@ def callback(call):
             f"🧾 ID платежа: `{payment_id}`\n\n"
             f"Проверьте входящий перевод на карту `{CARD_NUMBER}` и нажмите кнопку:"
         )
-        bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
+        try:
+            bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
+        except Exception as e:
+            print(f"Ошибка отправки админу: {e}")
 
-        elif call.data.startswith("admconfirm_"):
-            if user_id != ADMIN_ID: return
-            payment_id = call.data.split("_", 1)[1]
-        
+    elif call.data.startswith("admconfirm_"):
+        if user_id != ADMIN_ID: return
+        payment_id = call.data.split("_", 1)[1]
 
         cursor.execute("SELECT user_id, amount, status FROM payments WHERE payment_id=?", (payment_id,))
         p_row = cursor.fetchone()
@@ -871,4 +873,4 @@ def give_balance(message):
         bot.reply_to(message, "Формат: `/give_balance ID СУММА`", parse_mode="Markdown")
 
 print("Бот успешно запущен!")
-bot.infinity_polling()
+bot.infinity_polling() 
