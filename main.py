@@ -546,16 +546,20 @@ def callback(call):
     # =============== НОВАЯ СИСТЕМА: ПОПОЛНЕНИЕ ПОДАРКАМИ ===============
     elif call.data == "topup_method_stars":
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
-        msg = bot.send_message(
-            call.message.chat.id, 
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile"))
+
+        text = (
             f"🎁 **Пополнение баланса через Подарки (Star Gifts)**\n\n"
-            f"1. Перейдите в профиль администратора: {GIFTS_PROFILE}\n"
-            f"2. Выберите и отправьте подарок на нужную сумму.\n"
+            f"1. Перейдите в профиль: **{GIFTS_PROFILE}**\n"
+            f"2. Отправьте подарок на нужную сумму.\n"
             f"3. В комментарии к подарку **обязательно** укажите ваш ID: `{user_id}`\n\n"
-            f"📸 **После отправки подарка отправьте скриншот подтверждения (или текстовое сообщение) прямо в этот чат:**", 
-            parse_mode="Markdown"
+            f"📸 **Отправьте скриншот подтверждения (или текстовое сообщение) прямо в этот чат:**"
         )
-        bot.register_next_step_handler(msg, process_gift_proof)
+        
+        sent_msg = bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
+        bot.register_next_step_handler(sent_msg, process_gift_proof)
 
     # Админские кнопки для подарков
     elif call.data.startswith("admgift_approve_"):
@@ -782,7 +786,6 @@ def callback(call):
 
 # ==================== STEP HANDLERS (ОБРАБОТКА ВВОДА) ====================
 
-# -- Обработка скриншота/заявки на пополнение подарком --
 def process_gift_proof(message):
     if message.text and message.text.startswith('/'): return
     user_id = message.from_user.id
@@ -810,7 +813,6 @@ def process_gift_proof(message):
     except Exception as e:
         bot.reply_to(message, "❌ Ошибка при отправке заявки администратору.")
 
-# -- Обработка ввода суммы админом после проверки подарка --
 def process_admin_gift_amount(message, target_uid):
     if message.from_user.id != ADMIN_ID: return
     try:
@@ -827,7 +829,6 @@ def process_admin_gift_amount(message, target_uid):
         msg = bot.reply_to(message, "❌ Ошибка! Введите числовое значение.")
         bot.register_next_step_handler(msg, process_admin_gift_amount, target_uid)
 
-# -- Обычное пополнение UAH --
 def process_topup_amount(message):
     if message.text and message.text.startswith('/'): return
     try:
