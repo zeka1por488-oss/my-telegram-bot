@@ -642,7 +642,6 @@ def callback(call):
     elif call.data.startswith("admconfirm_"):
         if user_id != ADMIN_ID: return
         
-        # Разделяем колбэк формата admconfirm_uah_ID или admconfirm_stars_ID
         parts = call.data.split("_", 2)
         if len(parts) < 3:
             return
