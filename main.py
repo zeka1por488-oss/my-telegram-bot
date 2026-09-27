@@ -27,8 +27,8 @@ def keep_alive():
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8657141354:AAH_SIZmAGwshiFvbDff_9J8_kNtSvwZ5u4")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "7408654429"))
 MANAGER_USERNAME = "Nazarow927"
-GARANT_USERNAME = "garant_nazarow"
-REVIEWS_CHANNEL_ID = ""  # Укажите ID канала отзывов (например "-100123456789"), если есть
+GIFTS_PROFILE = "@garant_nazarow" # Профиль для приема подарков
+REVIEWS_CHANNEL_ID = ""  # Укажите ID канала отзывов, если есть
 
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "4400005572759295")
 CARD_HOLDER = "А-Банк / Карта UAH"
@@ -160,6 +160,23 @@ def get_main_menu_keyboard():
     markup.add(btn5, btn6)
     return markup
 
+def get_admin_keyboard():
+    markup = types.InlineKeyboardMarkup()
+    b1 = types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
+    b2 = types.InlineKeyboardButton("👤 Управление пользователем", callback_data="admin_user_manage")
+    b3 = types.InlineKeyboardButton("➕ Добавить товар", callback_data="admin_add_item")
+    b4 = types.InlineKeyboardButton("🗑 Удалить товар", callback_data="admin_del_item")
+    b5 = types.InlineKeyboardButton("📢 Массовая рассылка", callback_data="admin_broadcast")
+    b6 = types.InlineKeyboardButton("🎁 Создать промокод", callback_data="admin_create_promo")
+    b7 = types.InlineKeyboardButton("📥 Скачать БД", callback_data="admin_download_db")
+    
+    markup.add(b1)
+    markup.add(b2)
+    markup.add(b3, b4)
+    markup.add(b5, b6)
+    markup.add(b7)
+    return markup
+
 # ==================== КОМАНДЫ ====================
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -211,61 +228,15 @@ def admin_panel(message):
         bot.send_message(message.chat.id, f"❌ Отказано в доступе. Ваш ID: `{message.from_user.id}`", parse_mode="Markdown")
         return
     
-    markup = types.InlineKeyboardMarkup()
-    b1 = types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
-    b2 = types.InlineKeyboardButton("➕ Добавить товар", callback_data="admin_add_item")
-    b3 = types.InlineKeyboardButton("🗑 Удалить товар", callback_data="admin_del_item")
-    b4 = types.InlineKeyboardButton("📢 Массовая рассылка", callback_data="admin_broadcast")
-    b5 = types.InlineKeyboardButton("💰 Выдать баланс", callback_data="admin_give_info")
-    b6 = types.InlineKeyboardButton("🎁 Промокоды", callback_data="admin_promo_info")
-    
-    markup.add(b1)
-    markup.add(b2, b3)
-    markup.add(b4)
-    markup.add(b5, b6)
-    
-    text = "🛠 **Панель Администратора**\n\nУправляйте магазином с помощью кнопок ниже:"
+    markup = get_admin_keyboard()
+    text = "🛠 **Панель Администратора**\n\nУправляйте магазином с помощью интерактивных кнопок ниже:"
     bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
-
-@bot.message_handler(commands=['broadcast'])
-def broadcast_command(message):
-    if message.from_user.id != ADMIN_ID: return
-    bot.clear_step_handler_by_chat_id(chat_id=message.chat.id)
-    msg = bot.send_message(message.chat.id, "📢 **Массовая рассылка**\n\nОтправьте сообщение для рассылки:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, process_broadcast)
-
-@bot.message_handler(commands=['add_promo'])
-def add_promo_command(message):
-    if message.from_user.id != ADMIN_ID: return
-    try:
-        _, code, reward, uses = message.text.split()
-        cursor.execute("INSERT OR REPLACE INTO promocodes (code, reward, uses_left) VALUES (?, ?, ?)", 
-                       (code, float(reward), int(uses)))
-        conn.commit()
-        bot.reply_to(message, f"✅ Промокод `{code}` на **{reward}** ({uses} активаций) создан!", parse_mode="Markdown")
-    except Exception:
-        bot.reply_to(message, "Формат: `/add_promo КОД СУММА КОЛ_ВО`\nПример: `/add_promo START100 100 5`", parse_mode="Markdown")
-
-@bot.message_handler(commands=['give_balance'])
-def give_balance(message):
-    if message.from_user.id != ADMIN_ID: return
-    try:
-        _, target_id, amount = message.text.split()
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (float(amount), int(target_id)))
-        conn.commit()
-        bot.reply_to(message, f"💰 Выдано **{amount}** пользователю `{target_id}`.", parse_mode="Markdown")
-    except Exception:
-        bot.reply_to(message, "Формат: `/give_balance ID СУММА`", parse_mode="Markdown")
 
 # ==================== CALLBACK HANDLER ====================
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
     bot.answer_callback_query(call.id)
     user_id = call.from_user.id
-
-    # Очищаем обработчики ввода при навигации по кнопкам меню
-    if call.data in ["main_menu", "profile", "catalog_cats", "faq_info", "ref_system"]:
-        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
     
     cursor.execute("SELECT balance, currency, last_bonus FROM users WHERE user_id=?", (user_id,))
     u_row = cursor.fetchone()
@@ -279,21 +250,49 @@ def callback(call):
     sym = CURRENCY_SYMBOLS.get(curr, "грн")
 
     if call.data == "admin_add_item":
-        if user_id != ADMIN_ID:
-            bot.send_message(call.message.chat.id, "❌ Вы не администратор!")
-            return
+        if user_id != ADMIN_ID: return
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
         msg = bot.send_message(
             call.message.chat.id, 
-            "➕ **Добавление товара / номера**\n\n"
+            "➕ **Добавление товара**\n\n"
             "Отправьте данные через запятую:\n"
-            "`Название/Номер, Категория, Цена_UAH, Цена_STARS, Цена_RUB`\n\n"
-            "*Пример 1:*\n`+380991234567, 📲 Номера, 150, 200, 350`\n\n"
-            "*Пример 2 (простой):*\n`TG Премиум 1 мес, 💎 Премиум, 120`", 
+            "`Название, Категория, Цена_UAH, Цена_STARS, Цена_RUB`\n\n"
+            "*Пример:*\n`+380991234567, 📲 Номера, 150, 200, 350`", 
             parse_mode="Markdown"
         )
         bot.register_next_step_handler(msg, process_add_item)
         return
+
+    elif call.data == "admin_user_manage":
+        if user_id != ADMIN_ID: return
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        msg = bot.send_message(call.message.chat.id, "👤 **Введите Telegram ID пользователя:**", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_admin_find_user)
+
+    elif call.data == "admin_create_promo":
+        if user_id != ADMIN_ID: return
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        msg = bot.send_message(
+            call.message.chat.id,
+            "🎁 **Создание промокода**\n\nВведите данные через пробел:\n`КОД СУММА КОЛИЧЕСТВО`\n\n*Пример:* `BONUS100 100 10`",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, process_admin_create_promo)
+
+    elif call.data == "admin_download_db":
+        if user_id != ADMIN_ID: return
+        try:
+            with open("store.db", "rb") as db_file:
+                bot.send_document(call.message.chat.id, db_file, caption="📥 **Файл базы данных store.db**")
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"❌ Ошибка отправки БД: {e}")
+
+    elif call.data.startswith("admbal_"):
+        if user_id != ADMIN_ID: return
+        action, target_uid = call.data.split("_")[1], int(call.data.split("_")[2])
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        msg = bot.send_message(call.message.chat.id, f"💰 Введите сумму для {'начисления' if action == 'add' else 'списания'}:")
+        bot.register_next_step_handler(msg, process_admin_change_balance, target_uid, action)
 
     elif call.data == "daily_bonus":
         now = int(time.time())
@@ -443,14 +442,13 @@ def callback(call):
 
         text = (
             "📖 **Информация и Правила магазина**\n\n"
-            "⏰ **Режим работы:** 24/7 (Поддержка ответит в течение 10–15 минут).\n\n"
+            "⏰ **Режим работы:** 24/7\n\n"
             "🛡 **Гарантия и условия:**\n"
             "• Все товары проходят строгую проверку перед выдачей.\n"
-            "• Замена товара или возврат осуществляется при наличии видеозаписи с момента покупки.\n"
-            "• Время на замену невалида — 20 минут с момента выдачи.\n\n"
+            "• Замена товара или возврат осуществляется при наличии видеозаписи с момента покупки.\n\n"
             "💳 **Пополнение и Оплата:**\n"
-            "• Автоматическое зачисление после подтверждения платежа админом.\n"
-            "• В случае вопросов по оплате пишите менеджеру: @" + MANAGER_USERNAME
+            "• Вы можете пополнить баланс картой или через Подарки (Stars).\n"
+            "• В случае вопросов пишите менеджеру: @" + MANAGER_USERNAME
         )
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
@@ -521,9 +519,10 @@ def callback(call):
     elif call.data == "top_up_balance":
         markup = types.InlineKeyboardMarkup()
         b_uah = types.InlineKeyboardButton("💳 UAH (Карта)", callback_data="topup_method_uah")
-        b_stars = types.InlineKeyboardButton("⭐ STARS (Telegram Подарок)", callback_data="topup_method_stars")
+        b_stars = types.InlineKeyboardButton("🎁 Telegram Stars (Подарок)", callback_data="topup_method_stars")
         b_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
-        markup.add(b_uah, b_stars)
+        markup.add(b_uah)
+        markup.add(b_stars)
         markup.add(b_back)
 
         bot.edit_message_text(
@@ -544,27 +543,45 @@ def callback(call):
         )
         bot.register_next_step_handler(msg, process_topup_amount)
 
+    # =============== НОВАЯ СИСТЕМА: ПОПОЛНЕНИЕ ПОДАРКАМИ ===============
     elif call.data == "topup_method_stars":
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
         msg = bot.send_message(
             call.message.chat.id, 
-            "⭐ **Пополнение баланса Звёздами (Telegram Gifts)**\n\n"
-            "Введите количество звёзд, на которое хотите пополнить (например: `50`, `100`, `500`):", 
+            f"🎁 **Пополнение баланса через Подарки (Star Gifts)**\n\n"
+            f"1. Перейдите в профиль администратора: {GIFTS_PROFILE}\n"
+            f"2. Выберите и отправьте подарок на нужную сумму.\n"
+            f"3. В комментарии к подарку **обязательно** укажите ваш ID: `{user_id}`\n\n"
+            f"📸 **После отправки подарка отправьте скриншот подтверждения (или текстовое сообщение) прямо в этот чат:**", 
             parse_mode="Markdown"
         )
-        bot.register_next_step_handler(msg, process_topup_stars_amount)
+        bot.register_next_step_handler(msg, process_gift_proof)
+
+    # Админские кнопки для подарков
+    elif call.data.startswith("admgift_approve_"):
+        if user_id != ADMIN_ID: return
+        target_uid = int(call.data.split("_")[2])
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        msg = bot.send_message(call.message.chat.id, f"💰 Введите количество звёзд для зачисления пользователю `{target_uid}`:", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_admin_gift_amount, target_uid)
+
+    elif call.data.startswith("admgift_reject_"):
+        if user_id != ADMIN_ID: return
+        target_uid = int(call.data.split("_")[2])
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        bot.send_message(call.message.chat.id, f"❌ Заявка пользователя `{target_uid}` отклонена.")
+        try:
+            bot.send_message(target_uid, "❌ Ваша заявка на пополнение через Подарок была отклонена администратором.")
+        except: pass
+    # ===================================================================
 
     elif call.data.startswith("paid_"):
         payment_id = call.data.split("_", 1)[1]
         cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
         p_row = cursor.fetchone()
-        
-        if not p_row:
-            bot.send_message(call.message.chat.id, "❌ Счет не найден!")
-            return
+        if not p_row: return
 
         p_amount, p_status = p_row
-
         if p_status == "completed":
             bot.send_message(call.message.chat.id, "✅ Этот платеж уже подтвержден!")
             return
@@ -597,50 +614,6 @@ def callback(call):
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 
-    elif call.data.startswith("paidstars_"):
-        payment_id = call.data.split("_", 1)[1]
-        cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
-        p_row = cursor.fetchone()
-
-        if not p_row:
-            bot.send_message(call.message.chat.id, "❌ Заявка не найдена!")
-            return
-
-        p_amount, p_status = p_row
-
-        if p_status == "completed":
-            bot.send_message(call.message.chat.id, "✅ Эти звёзды уже были зачислены!")
-            return
-
-        bot.edit_message_text(
-            f"⏳ **Заявка на проверку подарка отправлена!**\n\n"
-            f"⭐ Заявлено: **{int(p_amount)} ⭐**\n"
-            f"🆔 ID заявки: `{payment_id}`\n\n"
-            f"Администратор проверит получение подарка на **@{GARANT_USERNAME}** и зачислит баланс.",
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown"
-        )
-
-        username = f"@{call.from_user.username}" if call.from_user.username else "без username"
-        adm_markup = types.InlineKeyboardMarkup()
-        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить (Начислить ⭐)", callback_data=f"admconfirmstars_{payment_id}")
-        btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admreject_{payment_id}")
-        adm_markup.add(btn_confirm, btn_reject)
-
-        adm_text = (
-            f"🎁 **ЗАЯВКА НА ПОПОЛНЕНИЕ ЗВЁЗДАМИ (GIFT)!**\n\n"
-            f"👤 Покупатель: {call.from_user.first_name} ({username})\n"
-            f"🆔 ID пользователя: `{user_id}`\n"
-            f"⭐ Ожидаемый подарок на сумму: **{int(p_amount)} ⭐**\n"
-            f"🧾 ID заявки: `{payment_id}`\n\n"
-            f"📌 **Проверьте получение подарка на @{GARANT_USERNAME}** и нажмите кнопку ниже:"
-        )
-        try:
-            bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
-        except Exception as e:
-            print(f"Ошибка отправки админу: {e}")
-
     elif call.data.startswith("admconfirm_"):
         if user_id != ADMIN_ID: return
         payment_id = call.data.split("_", 1)[1]
@@ -663,43 +636,21 @@ def callback(call):
             bot.send_message(p_uid, f"🎉 **Баланс успешно пополнен!**\n💰 Вам зачислено **+{p_amount:.2f} грн**.", parse_mode="Markdown")
         except Exception: pass
 
-    elif call.data.startswith("admconfirmstars_"):
-        if user_id != ADMIN_ID: return
-        payment_id = call.data.split("_", 1)[1]
-
-        cursor.execute("SELECT user_id, amount, status FROM payments WHERE payment_id=?", (payment_id,))
-        p_row = cursor.fetchone()
-        if not p_row: return
-
-        p_uid, p_amount, p_status = p_row
-        if p_status == "completed":
-            bot.send_message(call.message.chat.id, "⚠️ Эти звёзды уже зачислены!")
-            return
-
-        cursor.execute("UPDATE payments SET status='completed' WHERE payment_id=?", (payment_id,))
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (p_amount, p_uid))
-        conn.commit()
-
-        bot.edit_message_text(f"✅ **Подарок подтверждён!** Пользователю `{p_uid}` зачислено **+{int(p_amount)} ⭐**.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
-        try:
-            bot.send_message(p_uid, f"🎉 **Подарок проверен и подтверждён!**\n\n⭐ На ваш баланс зачислено: **+{int(p_amount)} ⭐**", parse_mode="Markdown")
-        except Exception: pass
-
     elif call.data.startswith("admreject_"):
         if user_id != ADMIN_ID: return
         payment_id = call.data.split("_", 1)[1]
 
-        cursor.execute("SELECT user_id, amount FROM payments WHERE payment_id=?", (payment_id,))
+        cursor.execute("SELECT user_id FROM payments WHERE payment_id=?", (payment_id,))
         p_row = cursor.fetchone()
         if not p_row: return
-        p_uid, p_amount = p_row
+        p_uid = p_row[0]
 
         cursor.execute("UPDATE payments SET status='rejected' WHERE payment_id=?", (payment_id,))
         conn.commit()
 
         bot.edit_message_text(f"❌ **Заявка #{payment_id} отклонена.**", call.message.chat.id, call.message.message_id)
         try:
-            bot.send_message(p_uid, f"❌ **Заявка на пополнение была отклонена.** Средства/подарок не поступили.", parse_mode="Markdown")
+            bot.send_message(p_uid, f"❌ **Ваша заявка на пополнение была отклонена.**", parse_mode="Markdown")
         except Exception: pass
 
     elif call.data == "change_currency":
@@ -780,7 +731,7 @@ def callback(call):
 
     elif call.data == "admin_del_item":
         if user_id != ADMIN_ID: return
-        cursor.execute("SELECT id, name, price_uah, category FROM catalog_items")
+        cursor.execute("SELECT id, name, price_uah FROM catalog_items")
         items = cursor.fetchall()
         
         markup = types.InlineKeyboardMarkup()
@@ -788,7 +739,7 @@ def callback(call):
             bot.send_message(call.message.chat.id, "❌ В каталоге нет товаров для удаления.")
             return
 
-        for item_id, name, price_uah, category in items:
+        for item_id, name, price_uah in items:
             markup.add(types.InlineKeyboardButton(f"❌ Удалить: {name} ({price_uah} грн)", callback_data=f"delitem_{item_id}"))
 
         bot.send_message(call.message.chat.id, "🗑 **Выберите товар для удаления:**", reply_markup=markup)
@@ -829,19 +780,56 @@ def callback(call):
         )
         bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
 
-    elif call.data == "admin_give_info":
-        if user_id != ADMIN_ID: return
-        bot.send_message(call.message.chat.id, "💰 Чтобы выдать баланс, отправьте команду:\n`/give_balance ID СУММА`\n\n*Пример:* `/give_balance 7408654429 100`", parse_mode="Markdown")
-
-    elif call.data == "admin_promo_info":
-        if user_id != ADMIN_ID: return
-        bot.send_message(call.message.chat.id, "🎁 Чтобы создать промокод, отправьте команду:\n`/add_promo КОД СУММА КОЛИЧЕСТВО`\n\n*Пример:* `/add_promo BONUS50 50 10`", parse_mode="Markdown")
-
 # ==================== STEP HANDLERS (ОБРАБОТКА ВВОДА) ====================
-def process_topup_amount(message):
-    if message.text and message.text.startswith('/'):
-        return
 
+# -- Обработка скриншота/заявки на пополнение подарком --
+def process_gift_proof(message):
+    if message.text and message.text.startswith('/'): return
+    user_id = message.from_user.id
+    username = f"@{message.from_user.username}" if message.from_user.username else "без username"
+
+    markup = types.InlineKeyboardMarkup()
+    b1 = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admgift_approve_{user_id}")
+    b2 = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admgift_reject_{user_id}")
+    markup.add(b1, b2)
+
+    admin_text = (
+        f"📥 **Новая заявка на пополнение (Подарок)!**\n\n"
+        f"👤 От: {message.from_user.first_name} ({username})\n"
+        f"🆔 ID: `{user_id}`\n"
+        f"📌 Проверьте получение подарка в профиле {GIFTS_PROFILE}"
+    )
+
+    try:
+        if message.photo:
+            bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=admin_text, parse_mode="Markdown", reply_markup=markup)
+        else:
+            bot.send_message(ADMIN_ID, f"{admin_text}\n\n💬 Текст заявки: {message.text}", parse_mode="Markdown", reply_markup=markup)
+        
+        bot.reply_to(message, "✅ **Заявка отправлена администратору!**\nОжидайте зачисления баланса после проверки.")
+    except Exception as e:
+        bot.reply_to(message, "❌ Ошибка при отправке заявки администратору.")
+
+# -- Обработка ввода суммы админом после проверки подарка --
+def process_admin_gift_amount(message, target_uid):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        amount = float(message.text.replace(",", ".").strip())
+        
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, target_uid))
+        conn.commit()
+
+        bot.reply_to(message, f"✅ Успешно начислено **{amount} ⭐** пользователю `{target_uid}`.", parse_mode="Markdown")
+        try:
+            bot.send_message(target_uid, f"🎉 **Заявка одобрена!**\nНа ваш баланс зачислено **{amount} ⭐** за отправленный подарок!", parse_mode="Markdown")
+        except Exception: pass
+    except ValueError:
+        msg = bot.reply_to(message, "❌ Ошибка! Введите числовое значение.")
+        bot.register_next_step_handler(msg, process_admin_gift_amount, target_uid)
+
+# -- Обычное пополнение UAH --
+def process_topup_amount(message):
+    if message.text and message.text.startswith('/'): return
     try:
         amount = float(message.text.replace(",", ".").strip())
         if amount < 10:
@@ -868,52 +856,81 @@ def process_topup_amount(message):
             f"💳 Карта: `{CARD_NUMBER}`\n"
             f"🏦 Банк: **{CARD_HOLDER}**\n\n"
             "⚠️ **Инструкция:**\n"
-            "1. Скопируйте номер карты (нажмите на него).\n"
-            f"2. Переведите ровно **{amount:.2f} грн** через приложение вашего банка.\n"
-            "3. После совершения перевода нажмите кнопку **«✅ Я оплатил»** ниже."
+            "1. Скопируйте номер карты.\n"
+            f"2. Переведите ровно **{amount:.2f} грн**.\n"
+            "3. Нажмите кнопку **«✅ Я оплатил»** ниже."
         )
         bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
-
     except ValueError:
-        msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите только число (например: `100` или `250.50`):", parse_mode="Markdown")
+        msg = bot.reply_to(message, "❌ Введите число (например: `100`):", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_topup_amount)
 
-def process_topup_stars_amount(message):
-    if message.text and message.text.startswith('/'):
-        return
-
+def process_admin_find_user(message):
+    if message.from_user.id != ADMIN_ID: return
     try:
-        amount = float(message.text.replace(",", ".").strip())
-        if amount <= 0:
-            msg = bot.reply_to(message, "❌ Сумма должна быть больше 0 ⭐.\nВведите количество звёзд ещё раз:")
-            bot.register_next_step_handler(msg, process_topup_stars_amount)
-            return
-        
-        user_id = message.from_user.id
-        payment_id = f"paystars_{user_id}_{int(time.time())}"
+        target_uid = int(message.text.strip())
+        cursor.execute("SELECT balance, currency FROM users WHERE user_id=?", (target_uid,))
+        row = cursor.fetchone()
 
-        cursor.execute("INSERT INTO payments (payment_id, user_id, amount) VALUES (?, ?, ?)", (payment_id, user_id, amount))
-        conn.commit()
+        if not row:
+            bot.reply_to(message, "❌ Пользователь с таким ID не найден в базе.")
+            return
+
+        bal, u_curr = row
+        u_sym = CURRENCY_SYMBOLS.get(u_curr, "грн")
 
         markup = types.InlineKeyboardMarkup()
-        btn_paid = types.InlineKeyboardButton("🎁 Я отправил подарок", callback_data=f"paidstars_{payment_id}")
-        btn_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
-        markup.add(btn_paid)
-        markup.add(btn_back)
+        b_add = types.InlineKeyboardButton("➕ Начислить баланс", callback_data=f"admbal_add_{target_uid}")
+        b_sub = types.InlineKeyboardButton("➖ Списать баланс", callback_data=f"admbal_sub_{target_uid}")
+        markup.add(b_add, b_sub)
 
-        text = (
-            f"⭐ **Пополнение баланса Звёздами (Telegram Gift)**\n\n"
-            f"💰 Заявленная сумма: **{int(amount)} ⭐**\n\n"
-            f"📌 **Инструкция по пополнению:**\n"
-            f"1. Отправьте Telegram-подарок (например, Кольцо / Gift) эквивалентом **{int(amount)} ⭐** на аккаунт:\n"
-            f"👉 **@{GARANT_USERNAME}**\n\n"
-            f"2. После успешной отправки подарка нажмите кнопку **«🎁 Я отправил подарок»** ниже."
+        bot.send_message(
+            message.chat.id,
+            f"👤 **Информация о пользователе:**\n\n"
+            f"🆔 ID: `{target_uid}`\n"
+            f"💰 Баланс: **{bal:.2f} {u_sym}** ({u_curr})\n\n"
+            f"Выберите действие:",
+            parse_mode="Markdown",
+            reply_markup=markup
         )
-        bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
-
     except ValueError:
-        msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите только целое число (например: `50` или `100`):", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, process_topup_stars_amount)
+        bot.reply_to(message, "❌ Некорректный Telegram ID. Введите число.")
+
+def process_admin_change_balance(message, target_uid, action):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        val = float(message.text.replace(",", ".").strip())
+        if action == "sub": val = -val
+
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (val, target_uid))
+        conn.commit()
+
+        cursor.execute("SELECT balance, currency FROM users WHERE user_id=?", (target_uid,))
+        new_bal, u_curr = cursor.fetchone()
+        u_sym = CURRENCY_SYMBOLS.get(u_curr, "грн")
+
+        bot.reply_to(
+            message,
+            f"✅ Баланс пользователя `{target_uid}` успешно изменен!\n"
+            f"💰 Новый баланс: **{new_bal:.2f} {u_sym}**",
+            parse_mode="Markdown"
+        )
+        try:
+            bot.send_message(target_uid, f"🔔 Ваш баланс был изменён администратором.\n💰 Текущий баланс: **{new_bal:.2f} {u_sym}**", parse_mode="Markdown")
+        except Exception: pass
+    except ValueError:
+        bot.reply_to(message, "❌ Ошибка! Введите числовое значение.")
+
+def process_admin_create_promo(message):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        code, reward, uses = message.text.split()
+        cursor.execute("INSERT OR REPLACE INTO promocodes (code, reward, uses_left) VALUES (?, ?, ?)", 
+                       (code, float(reward), int(uses)))
+        conn.commit()
+        bot.reply_to(message, f"✅ Промокод `{code}` на **{reward}** ({uses} активаций) создан!", parse_mode="Markdown")
+    except Exception:
+        bot.reply_to(message, "❌ Ошибка формата! Отправьте: `КОД СУММА КОЛ_ВО`", parse_mode="Markdown")
 
 def process_review_text(message, order_id, rating):
     text = message.text if message.text else "Без текстового отзыва"
@@ -943,8 +960,7 @@ def save_review(order_id, user_id, rating, text, first_name, username):
 
     try:
         bot.send_message(ADMIN_ID, review_msg, parse_mode="Markdown")
-    except Exception:
-        pass
+    except Exception: pass
 
     if REVIEWS_CHANNEL_ID:
         try:
@@ -980,11 +996,6 @@ def process_add_item(message):
     try:
         parts = [p.strip() for p in message.text.split(",")]
         name = parts[0]
-        
-        if len(parts) == 1:
-            bot.reply_to(message, "❌ Забыли указать хотя бы цену! Пример:\n`+380991234567, Номера, 100`")
-            return
-            
         category = parts[1] if len(parts) > 2 else "🔥 Разное"
         p_uah = float(parts[2]) if len(parts) > 2 else float(parts[1])
         p_stars = float(parts[3]) if len(parts) > 3 else round(p_uah * 1.5, 1)
@@ -1002,14 +1013,7 @@ def process_add_item(message):
             parse_mode="Markdown"
         )
     except Exception as e:
-        print(f"Ошибка добавления товара: {e}")
-        bot.reply_to(
-            message, 
-            "❌ **Ошибка формата!** Отправьте вот так:\n"
-            "`Название, Категория, Цена_UAH`\n\n"
-            "*Пример:*\n`+380991234567, Номера, 150`", 
-            parse_mode="Markdown"
-        )
+        bot.reply_to(message, "❌ **Ошибка формата!** Пример:\n`+380991234567, Номера, 150`", parse_mode="Markdown")
 
 def process_promo_activation(message):
     user_id = message.from_user.id
