@@ -448,23 +448,13 @@ def callback(call):
             "• Автоматическое зачисление после подтверждения платежа админом.\n"
             "• В случае вопросов по оплате пишите менеджеру: @" + MANAGER_USERNAME
         )
-        bot.edit_message_text:
-        elif call.data == "topup_method_stars":
-        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Назад к выбору", callback_data="top_up_balance"))
-        
-        msg = bot.edit_message_text(
-            f"⭐ **Пополнение баланса Звёздами (Telegram Gifts)**\n\n"
-            f"Введите количество звёзд, на которое хотите пополнить (например: `50`, `100`, `500`):\n\n"
-            f"📌 Подарки отправляются на аккаунт: **@{GARANT_USERNAME}**", 
-            call.message.chat.id, 
-            call.message.message_id,
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
-        bot.register_next_step_handler(msg, process_topup_stars_amount)
-        
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data.startswith("done_"):
+        _, order_id, client_id = call.data.split("_")
+        cursor.execute("UPDATE orders SET status='completed' WHERE order_id=?", (order_id,))
+        conn.commit()
+
         bot.edit_message_text(f"✅ **Заказ #{order_id} выполнен!**", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
         
         markup = types.InlineKeyboardMarkup(row_width=5)
@@ -553,12 +543,17 @@ def callback(call):
 
     elif call.data == "topup_method_stars":
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
-        msg = bot.send_message(
-            call.message.chat.id, 
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="top_up_balance"))
+        
+        msg = bot.edit_message_text(
             f"⭐ **Пополнение баланса Звёздами (Telegram Gifts)**\n\n"
             f"Введите количество звёзд, на которое хотите пополнить (например: `50`, `100`, `500`):\n\n"
             f"📌 Подарки отправляются на аккаунт: **@{GARANT_USERNAME}**", 
-            parse_mode="Markdown"
+            call.message.chat.id, 
+            call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=markup
         )
         bot.register_next_step_handler(msg, process_topup_stars_amount)
 
@@ -840,11 +835,11 @@ def callback(call):
 
     elif call.data == "admin_give_info":
         if user_id != ADMIN_ID: return
-        bot.send_message(call.message.chat.id, "💰 Чтобы выдать баланс, отправьте команду:\n`/give_balance ID СУММА`\n\n*Пример:* `/give_balance 7408654429 100`", parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "💰 Чтобы выдать баланс, отправьте команду:\n`/give_balance ID СУММА`\n\nПример: `/give_balance 7408654429 100`", parse_mode="Markdown")
 
     elif call.data == "admin_promo_info":
         if user_id != ADMIN_ID: return
-        bot.send_message(call.message.chat.id, "🎁 Чтобы создать промокод, отправьте команду:\n`/add_promo КОД СУММА КОЛИЧЕСТВО`\n\n*Пример:* `/add_promo BONUS50 50 10`", parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "🎁 Чтобы создать промокод, отправьте команду:\n`/add_promo КОД СУММА КОЛИЧЕСТВО`\n\nПример: `/add_promo BONUS50 50 10`", parse_mode="Markdown")
 
 # ==================== STEP HANDLERS (ОБРАБОТКА ВВОДА) ====================
 def process_topup_amount(message):
