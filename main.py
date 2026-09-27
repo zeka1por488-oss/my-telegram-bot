@@ -590,20 +590,21 @@ def callback(call):
         )
         try:
             bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
+            print(f"[LOG] Заявка UAH {payment_id} успешно отправлена админу {ADMIN_ID}")
         except Exception as e:
-            print(f"Ошибка отправки админу: {e}")
+            print(f"[ERROR] Не удалось отправить заявку админу: {e}")
 
-    # ПОДТВЕРЖДЕНИЕ ОПЛАТЫ STARS (ПОЛНОСТЬЮ АНАЛОГИЧНО UAH)
+    # ПОДТВЕРЖДЕНИЕ ОПЛАТЫ STARS (ИСПРАВЛЕНО ДЛЯ КОРРЕКТНОЙ ОТПРАВКИ АДМИНУ)
     elif call.data.startswith("paidstars_"):
         payment_id = call.data.split("_", 1)[1]
-        cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
+        cursor.execute("SELECT user_id, amount, status FROM payments WHERE payment_id=?", (payment_id,))
         p_row = cursor.fetchone()
         
         if not p_row:
             bot.send_message(call.message.chat.id, "❌ Счет не найден!")
             return
 
-        p_amount, p_status = p_row
+        p_owner_id, p_amount, p_status = p_row
 
         if p_status == "completed":
             bot.send_message(call.message.chat.id, "✅ Этот платеж уже подтвержден!")
@@ -628,15 +629,16 @@ def callback(call):
         adm_text = (
             f"📥 **Заявка на пополнение STARS!**\n\n"
             f"👤 Покупатель: {call.from_user.first_name} ({username})\n"
-            f"🆔 ID пользователя: `{user_id}`\n"
+            f"🆔 ID пользователя: `{p_owner_id}`\n"
             f"⭐ Сумма: **{int(p_amount)} ⭐**\n"
             f"🧾 ID платежа: `{payment_id}`\n\n"
             f"📌 Проверьте поступление подарка на **@{GARANT_USERNAME}**"
         )
         try:
             bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
+            print(f"[LOG] Заявка STARS {payment_id} успешно отправлена админу {ADMIN_ID}")
         except Exception as e:
-            print(f"Ошибка отправки админу: {e}")
+            print(f"[ERROR] Не удалось отправить заявку STARS админу: {e}")
 
     elif call.data.startswith("admconfirm_"):
         if user_id != ADMIN_ID: return
@@ -875,7 +877,6 @@ def process_topup_amount(message):
         msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите только число (например: `100` или `250.50`):", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_topup_amount)
 
-# ФУНКЦИЯ ПОПОЛНЕНИЯ ЗВЁЗДАМИ (ТОЧНАЯ КОПИЯ КАРТЫ С @garant_nazarow)
 def process_topup_stars_amount(message):
     if message.text and message.text.startswith('/'):
         return
@@ -973,7 +974,7 @@ def process_broadcast(message):
         f"✅ **Рассылка завершена!**\n\n"
         f"🟢 Успешно отправлено: **{success}**\n"
         f"🔴 Не доставлено (заблокировали): **{failed}**", 
-        parse_mode="Markdown"
+        parse_Mode="Markdown"
     )
 
 def process_add_item(message):
