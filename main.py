@@ -28,6 +28,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8657141354:AAEYU9omJX754PT4FqXsW8Jm6asF
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "7408654429"))
 MANAGER_USERNAME = "Nazarow927"
 GARANT_USERNAME = "garant_nazarow"
+GARANT_MD = GARANT_USERNAME.replace("_", "\\_")  # экранирование _ для Markdown
 REQUIRED_CHANNEL = "@nazarowshop"
 
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "4400005572759295")
@@ -639,7 +640,6 @@ def callback(call):
         text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{balance:.2f} {sym}**\n🌐 Выбранная валюта: **{curr}**"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # ==================== МЕТОДЫ ПОПОЛНЕНИЯ БАЛАНСА ====================
     elif call.data == "top_up_balance":
         markup = types.InlineKeyboardMarkup()
         b_uah = types.InlineKeyboardButton("💳 UAH (Карта)", callback_data="topup_method_uah")
@@ -738,7 +738,7 @@ def callback(call):
             f"⏳ **Заявка на проверку подарка отправлена!**\n\n"
             f"⭐ Заявлено: **{int(p_amount)} ⭐**\n"
             f"🆔 ID заявки: `{payment_id}`\n\n"
-            f"Администратор проверит получение подарка на **@{GARANT_USERNAME}** и зачислит баланс.",
+            f"Администратор проверит получение подарка на **@{GARANT_MD}** и зачислит баланс.",
             call.message.chat.id,
             call.message.message_id,
             parse_mode="Markdown"
@@ -756,7 +756,7 @@ def callback(call):
             f"🆔 ID пользователя: `{user_id}`\n"
             f"⭐ Ожидаемый подарок на сумму: **{int(p_amount)} ⭐**\n"
             f"🧾 ID заявки: `{payment_id}`\n\n"
-            f"📌 **Проверьте получение подарка на @{GARANT_USERNAME}** и нажмите кнопку ниже:"
+            f"📌 **Проверьте получение подарка на @{GARANT_MD}** и нажмите кнопку ниже:"
         )
         try:
             bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
@@ -1050,7 +1050,7 @@ def process_topup_stars_amount(message):
             f"💰 Заявленная сумма: **{int(amount)} ⭐**\n\n"
             f"📌 **Инструкция по пополнению:**\n"
             f"1. Отправьте Telegram-подарок (например, Кольцо / Gift) эквивалентом **{int(amount)} ⭐** на аккаунт:\n"
-            f"👉 **@{GARANT_USERNAME}**\n\n"
+            f"👉 **@{GARANT_MD}**\n\n"
             f"2. После успешной отправки подарка нажмите кнопку **«🎁 Я отправил подарок»** ниже."
         )
         bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
