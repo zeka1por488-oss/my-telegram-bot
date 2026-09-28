@@ -2,6 +2,7 @@ import os
 import sqlite3
 import telebot
 from telebot import types
+from telebot.apihelper import ApiTelegramException
 import time
 import random
 import threading
@@ -115,6 +116,14 @@ cursor.execute("""
 """)
 conn.commit()
 
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS banners (
+        menu_key TEXT PRIMARY KEY,
+        file_id TEXT
+    )
+""")
+conn.commit()
+
 # Проверка/миграция недостающих колонок
 try:
     cursor.execute("ALTER TABLE users ADD COLUMN last_bonus INTEGER DEFAULT 0")
@@ -139,6 +148,98 @@ REF_REWARDS = {
     "STARS": (5.0, "⭐"),
     "RUB": (7.0, "₽")
 }
+
+# ==================== БАННЕРЫ МЕНЮ ====================
+BANNER_MENUS = {
+    "main": "🏠 Главное меню",
+    "catalog": "🛒 Каталог",
+    "item": "📦 Карточка товара",
+    "profile": "👤 Профиль",
+    "topup": "💳 Пополнение баланса",
+    "currency": "🌐 Выбор валюты",
+    "ref": "👥 Рефералка",
+    "orders": "📜 Мои заказы",
+    "faq": "📖 Инфо / Правила",
+}
+
+def get_banner(menu_key):
+    try:
+        cursor.execute("SELECT file_id FROM banners WHERE menu_key=?", (menu_key,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        print(f"Ошибка чтения баннера: {e}")
+        return None
+
+def edit_text(text, chat_id, message_id, parse_mode=None, reply_markup=None):
+    """Редактирует текст. Если сообщение с фото — удаляет его и отправляет текстовое."""
+    try:
+        return bot.edit_message_text(text, chat_id, message_id, parse_mode=parse_mode, reply_markup=reply_markup)
+    except ApiTelegramException as e:
+        err = str(e)
+        if "message is not modified" in err:
+            return None
+        if "no text in the message to edit" in err:
+            try:
+                bot.delete_message(chat_id, message_id)
+            except Exception:
+                pass
+            return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+        raise
+
+def show_menu(message, menu_key, text, markup=None, chat_id=None, parse_mode="Markdown"):
+    """Показывает меню; если для menu_key задан баннер — с фото (подпись до 1024 символов)."""
+    if message is not None:
+        chat_id = message.chat.id
+    banner = get_banner(menu_key)
+    is_photo = message is not None and message.content_type == "photo"
+    use_banner = bool(banner) and len(text) <= 1024
+    try:
+        if use_banner and is_photo:
+            try:
+                return bot.edit_message_media(
+                    types.InputMediaPhoto(banner, caption=text, parse_mode=parse_mode),
+                    chat_id, message.message_id, reply_markup=markup
+                )
+            except ApiTelegramException as e:
+                if "message is not modified" in str(e):
+                    return None
+                raise
+        if use_banner:
+            sent = bot.send_photo(chat_id, banner, caption=text, parse_mode=parse_mode, reply_markup=markup)
+            if message is not None:
+                try:
+                    bot.delete_message(chat_id, message.message_id)
+                except Exception:
+                    pass
+            return sent
+        if message is None:
+            return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=markup)
+        return edit_text(text, chat_id, message.message_id, parse_mode, markup)
+    except Exception as e:
+        print(f"Ошибка показа меню {menu_key}: {e}")
+        try:
+            return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=markup)
+        except Exception as e2:
+            print(f"Ошибка отправки меню: {e2}")
+
+def get_admin_markup():
+    markup = types.InlineKeyboardMarkup()
+    b1 = types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
+    b2 = types.InlineKeyboardButton("➕ Добавить товар", callback_data="admin_add_item")
+    b3 = types.InlineKeyboardButton("🗑 Удалить товар", callback_data="admin_del_item")
+    b4 = types.InlineKeyboardButton("📢 Массовая рассылка", callback_data="admin_broadcast")
+    b5 = types.InlineKeyboardButton("💰 Выдать баланс", callback_data="admin_give_info")
+    b6 = types.InlineKeyboardButton("🎁 Промокоды", callback_data="admin_promo_info")
+    b7 = types.InlineKeyboardButton("🖼 Баннеры меню", callback_data="admin_banners")
+    markup.add(b1)
+    markup.add(b2, b3)
+    markup.add(b4)
+    markup.add(b5, b6)
+    markup.add(b7)
+    return markup
+
+ADMIN_PANEL_TEXT = "🛠 **Панель Администратора**\n\nУправляйте магазином с помощью кнопок ниже:"
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 def check_subscription(user_id):
@@ -315,7 +416,7 @@ def start(message):
 
     text = get_main_menu_text(message.from_user.first_name)
     markup = get_main_menu_keyboard()
-    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
+    show_menu(None, "main", text, markup, chat_id=message.chat.id)
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
@@ -324,20 +425,8 @@ def admin_panel(message):
         bot.send_message(message.chat.id, f"❌ Отказано в доступе. Ваш ID: `{message.from_user.id}`", parse_mode="Markdown")
         return
     
-    markup = types.InlineKeyboardMarkup()
-    b1 = types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
-    b2 = types.InlineKeyboardButton("➕ Добавить товар", callback_data="admin_add_item")
-    b3 = types.InlineKeyboardButton("🗑 Удалить товар", callback_data="admin_del_item")
-    b4 = types.InlineKeyboardButton("📢 Массовая рассылка", callback_data="admin_broadcast")
-    b5 = types.InlineKeyboardButton("💰 Выдать баланс", callback_data="admin_give_info")
-    b6 = types.InlineKeyboardButton("🎁 Промокоды", callback_data="admin_promo_info")
-    
-    markup.add(b1)
-    markup.add(b2, b3)
-    markup.add(b4)
-    markup.add(b5, b6)
-    
-    text = "🛠 **Панель Администратора**\n\nУправляйте магазином с помощью кнопок ниже:"
+    markup = get_admin_markup()
+    text = ADMIN_PANEL_TEXT
     bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
 @bot.message_handler(commands=['broadcast'])
@@ -381,7 +470,7 @@ def callback(call):
             bot.answer_callback_query(call.id, "✅ Подписка подтверждена!", show_alert=False)
             text = get_main_menu_text(call.from_user.first_name)
             markup = get_main_menu_keyboard()
-            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+            show_menu(call.message, "main", text, markup)
         else:
             bot.answer_callback_query(call.id, "❌ Вы всё ещё не подписаны на канал!", show_alert=True)
         return
@@ -423,6 +512,68 @@ def callback(call):
         bot.register_next_step_handler(msg, process_add_item)
         return
 
+    elif call.data == "admin_home":
+        if user_id != ADMIN_ID: return
+        edit_text(ADMIN_PANEL_TEXT, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=get_admin_markup())
+
+    elif call.data == "admin_banners":
+        if user_id != ADMIN_ID: return
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        markup = types.InlineKeyboardMarkup()
+        for key, title in BANNER_MENUS.items():
+            mark = "✅" if get_banner(key) else "➕"
+            markup.add(types.InlineKeyboardButton(f"{mark} {title}", callback_data=f"bn_menu_{key}"))
+        markup.add(types.InlineKeyboardButton("⬅️ Админ-панель", callback_data="admin_home"))
+        edit_text("🖼 **Баннеры меню**\n\n✅ — баннер установлен, ➕ — не задан.\nВыберите раздел:", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data.startswith("bn_menu_"):
+        if user_id != ADMIN_ID: return
+        key = call.data.split("_", 2)[2]
+        if key not in BANNER_MENUS: return
+        has = bool(get_banner(key))
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔄 Заменить фото" if has else "📤 Загрузить фото", callback_data=f"bn_set_{key}"))
+        if has:
+            markup.add(types.InlineKeyboardButton("👁 Посмотреть", callback_data=f"bn_view_{key}"))
+            markup.add(types.InlineKeyboardButton("🗑 Убрать баннер", callback_data=f"bn_del_{key}"))
+        markup.add(types.InlineKeyboardButton("⬅️ К списку", callback_data="admin_banners"))
+        status = "установлен ✅" if has else "не задан"
+        edit_text(f"🖼 **{BANNER_MENUS[key]}**\n\nБаннер: {status}", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data.startswith("bn_set_"):
+        if user_id != ADMIN_ID: return
+        key = call.data.split("_", 2)[2]
+        if key not in BANNER_MENUS: return
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        msg = bot.send_message(
+            call.message.chat.id,
+            f"📤 Отправьте **фото** для раздела «{BANNER_MENUS[key]}» (именно как фото, не как файл).\n\nОтмена: /cancel",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, process_banner_upload, key)
+
+    elif call.data.startswith("bn_view_"):
+        if user_id != ADMIN_ID: return
+        key = call.data.split("_", 2)[2]
+        file_id = get_banner(key)
+        if not file_id:
+            bot.send_message(call.message.chat.id, "❌ Баннер не задан.")
+            return
+        try:
+            bot.send_photo(call.message.chat.id, file_id, caption=f"🖼 Баннер: {BANNER_MENUS.get(key, key)}")
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"❌ Не удалось показать баннер: {e}")
+
+    elif call.data.startswith("bn_del_"):
+        if user_id != ADMIN_ID: return
+        key = call.data.split("_", 2)[2]
+        cursor.execute("DELETE FROM banners WHERE menu_key=?", (key,))
+        conn.commit()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📤 Загрузить фото", callback_data=f"bn_set_{key}"))
+        markup.add(types.InlineKeyboardButton("⬅️ К списку", callback_data="admin_banners"))
+        edit_text(f"🗑 Баннер раздела «{BANNER_MENUS.get(key, key)}» убран.", call.message.chat.id, call.message.message_id, reply_markup=markup)
+
     elif call.data == "daily_bonus":
         now = int(time.time())
         cooldown = 86400
@@ -439,7 +590,7 @@ def callback(call):
             
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("⬅️ Главное меню", callback_data="main_menu"))
-            bot.edit_message_text(
+            edit_text(
                 f"🎁 **Ежедневный бонус забран!**\n\n"
                 f"💰 На ваш баланс зачислено: **+{bonus_amount} {sym}**\n\n"
                 f"Возвращайтесь через 24 часа за новым бонусом!",
@@ -469,7 +620,7 @@ def callback(call):
                 markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"item_{item_id}"))
         
         markup.add(types.InlineKeyboardButton("⬅️ Главное меню", callback_data="main_menu"))
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        show_menu(call.message, "catalog", text, markup)
 
     elif call.data.startswith("item_"):
         item_id = call.data.split("_")[1]
@@ -497,7 +648,7 @@ def callback(call):
             f"📊 **Статус:** ✅ В наличии\n\n"
             "Нажмите **«Купить с баланса»** для автоматической оплаты."
         )
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        show_menu(call.message, "item", text, markup)
 
     elif call.data.startswith("req_"):
         item_id = call.data.split("_")[1]
@@ -535,7 +686,7 @@ def callback(call):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("💬 Перейти к менеджеру", url=f"https://t.me/{MANAGER_USERNAME}"))
         
-        bot.edit_message_text(
+        edit_text(
             f"✅ **Оплата прошла успешно!**\n\n"
             f"📦 Товар / Номер: **{name}**\n"
             f"💰 Списано: **{price:.2f} {sym}**\n"
@@ -580,14 +731,14 @@ def callback(call):
             "• Автоматическое зачисление после подтверждения платежа админом.\n"
             "• В случае вопросов по оплате пишите менеджеру: @" + MANAGER_USERNAME
         )
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        show_menu(call.message, "faq", text, markup)
 
     elif call.data.startswith("done_"):
         _, order_id, client_id = call.data.split("_")
         cursor.execute("UPDATE orders SET status='completed' WHERE order_id=?", (order_id,))
         conn.commit()
 
-        bot.edit_message_text(f"✅ **Заказ #{order_id} выполнен!**", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        edit_text(f"✅ **Заказ #{order_id} выполнен!**", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
         
         markup = types.InlineKeyboardMarkup(row_width=5)
         btns = [types.InlineKeyboardButton(f"⭐ {i}", callback_data=f"rate_{order_id}_{i}") for i in range(1, 6)]
@@ -613,7 +764,7 @@ def callback(call):
         markup.add(types.InlineKeyboardButton("⏭ Пропустить отзыв", callback_data=f"skip_rev_{order_id}_{rating}"))
 
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
-        msg = bot.edit_message_text(
+        msg = edit_text(
             f"⭐️ Вы поставили оценку **{rating}/5 ⭐**.\n\n"
             f"✍️ **Напишите краткий отзыв о покупке** (или нажмите кнопку «Пропустить»):",
             call.message.chat.id,
@@ -627,7 +778,7 @@ def callback(call):
         _, _, order_id, rating = call.data.split("_")
         rating = int(rating)
         save_review(order_id, user_id, rating, "Без текстового отзыва", call.from_user.first_name, call.from_user.username)
-        bot.edit_message_text("🙏 **Спасибо за вашу оценку!** Нам очень важно ваше мнение.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        edit_text("🙏 **Спасибо за вашу оценку!** Нам очень важно ваше мнение.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
     elif call.data == "profile":
         markup = types.InlineKeyboardMarkup()
@@ -645,8 +796,9 @@ def callback(call):
         markup.add(btn_back)
         
         text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{balance:.2f} {sym}**\n🌐 Выбранная валюта: **{curr}**"
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        show_menu(call.message, "profile", text, markup)
 
+    # ==================== ВЫБОР МЕТОДА ПОПОЛНЕНИЯ БАЛАНСА (ТОЧНО КАК В MAIN 3) ====================
     elif call.data == "top_up_balance":
         markup = types.InlineKeyboardMarkup()
         b_uah = types.InlineKeyboardButton("💳 UAH (Карта)", callback_data="topup_method_uah")
@@ -657,13 +809,7 @@ def callback(call):
         markup.add(b_ton)
         markup.add(b_back)
 
-        bot.edit_message_text(
-            "💳 **Выберите способ пополнения баланса:**", 
-            call.message.chat.id, 
-            call.message.message_id, 
-            parse_mode="Markdown", 
-            reply_markup=markup
-        )
+        show_menu(call.message, "topup", "💳 **Выберите способ пополнения баланса:**", markup)
 
     elif call.data == "topup_method_uah":
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
@@ -711,7 +857,7 @@ def callback(call):
             bot.send_message(call.message.chat.id, "✅ Этот платёж уже был зачислен!")
             return
 
-        bot.edit_message_text(
+        edit_text(
             f"⏳ **Заявка на проверку TON-перевода отправлена!**\n\n"
             f"💎 Сумма: **{p_amount:g} TON**\n"
             f"🆔 ID заявки: `{payment_id}`\n\n"
@@ -764,7 +910,7 @@ def callback(call):
         conn.commit()
 
         sym = CURRENCY_SYMBOLS.get(u_curr, "")
-        bot.edit_message_text(f"✅ TON-платёж подтверждён! Пользователю {p_uid} зачислено +{final_amount:.2f} {sym}.", call.message.chat.id, call.message.message_id)
+        edit_text(f"✅ TON-платёж подтверждён! Пользователю {p_uid} зачислено +{final_amount:.2f} {sym}.", call.message.chat.id, call.message.message_id)
         try:
             bot.send_message(p_uid, f"🎉 **Платёж TON подтверждён!**\n\n💰 На ваш баланс зачислено: **+{final_amount:.2f} {sym}**", parse_mode="Markdown")
         except Exception: pass
@@ -784,7 +930,7 @@ def callback(call):
             bot.send_message(call.message.chat.id, "✅ Этот платеж уже подтвержден!")
             return
 
-        bot.edit_message_text(
+        edit_text(
             f"⏳ **Заявка отправлена администратору!**\n\n"
             f"💰 Сумма: **{p_amount:.2f} грн**\n"
             f"🆔 ID платежа: `{payment_id}`\n\n"
@@ -827,7 +973,7 @@ def callback(call):
             bot.send_message(call.message.chat.id, "✅ Эти звёзды уже были зачислены!")
             return
 
-        bot.edit_message_text(
+        edit_text(
             f"⏳ **Заявка на проверку подарка отправлена!**\n\n"
             f"⭐ Заявлено: **{int(p_amount)} ⭐**\n"
             f"🆔 ID заявки: `{payment_id}`\n\n"
@@ -880,7 +1026,7 @@ def callback(call):
         conn.commit()
 
         sym = CURRENCY_SYMBOLS.get(u_curr, "")
-        bot.edit_message_text(f"✅ **Оплата #{payment_id} подтверждена!** Зачислено +{final_amount:.2f} {sym}.", call.message.chat.id, call.message.message_id)
+        edit_text(f"✅ **Оплата #{payment_id} подтверждена!** Зачислено +{final_amount:.2f} {sym}.", call.message.chat.id, call.message.message_id)
         try:
             bot.send_message(p_uid, f"🎉 **Баланс успешно пополнен!**\n💰 Вам зачислено **+{final_amount:.2f} {sym}**.", parse_mode="Markdown")
         except Exception: pass
@@ -909,7 +1055,7 @@ def callback(call):
         conn.commit()
 
         sym = CURRENCY_SYMBOLS.get(u_curr, "")
-        bot.edit_message_text(f"✅ **Подарок подтверждён!** Пользователю `{p_uid}` зачислено **+{final_amount:.2f} {sym}**.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        edit_text(f"✅ **Подарок подтверждён!** Пользователю `{p_uid}` зачислено **+{final_amount:.2f} {sym}**.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
         try:
             bot.send_message(p_uid, f"🎉 **Подарок проверен и подтверждён!**\n\n⭐ На ваш баланс зачислено: **+{final_amount:.2f} {sym}**", parse_mode="Markdown")
         except Exception: pass
@@ -926,7 +1072,7 @@ def callback(call):
         cursor.execute("UPDATE payments SET status='rejected' WHERE payment_id=?", (payment_id,))
         conn.commit()
 
-        bot.edit_message_text(f"❌ **Заявка #{payment_id} отклонена.**", call.message.chat.id, call.message.message_id)
+        edit_text(f"❌ **Заявка #{payment_id} отклонена.**", call.message.chat.id, call.message.message_id)
         try:
             bot.send_message(p_uid, f"❌ **Заявка на пополнение была отклонена.** Средства/подарок не поступили.", parse_mode="Markdown")
         except Exception: pass
@@ -939,7 +1085,7 @@ def callback(call):
         b_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
         markup.add(b1, b2, b3)
         markup.add(b_back)
-        bot.edit_message_text("🌐 **Выберите удобную валюту:**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        show_menu(call.message, "currency", "🌐 **Выберите удобную валюту:**", markup)
 
     elif call.data.startswith("set_curr_"):
         new_curr = call.data.split("_")[2]
@@ -966,7 +1112,7 @@ def callback(call):
         markup.add(types.InlineKeyboardButton("⬅️ Главное меню", callback_data="main_menu"))
         
         text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{new_bal:.2f} {new_sym}**\n🌐 Выбранная валюта: **{new_curr}**"
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        show_menu(call.message, "profile", text, markup)
 
     elif call.data == "ref_system":
         cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (user_id,))
@@ -985,7 +1131,7 @@ def callback(call):
         )
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile"))
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        show_menu(call.message, "ref", text, markup)
 
     elif call.data == "my_orders":
         cursor.execute("SELECT order_id, item_name, price, currency, status FROM orders WHERE user_id=? ORDER BY order_id DESC LIMIT 10", (user_id,))
@@ -1003,7 +1149,7 @@ def callback(call):
                 o_sym = CURRENCY_SYMBOLS.get(o_curr, "грн")
                 text += f"📦 **Заказ #{order_id}** | {item_name}\n💰 Сумма: {price:.2f} {o_sym} | Статус: `{st_text}`\n---\n"
 
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        show_menu(call.message, "orders", text, markup)
 
     elif call.data == "use_promo":
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
@@ -1013,7 +1159,7 @@ def callback(call):
     elif call.data == "main_menu":
         text = get_main_menu_text(call.from_user.first_name)
         markup = get_main_menu_keyboard()
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        show_menu(call.message, "main", text, markup)
 
     elif call.data == "admin_del_item":
         if user_id != ADMIN_ID: return
@@ -1035,7 +1181,7 @@ def callback(call):
         item_id = call.data.split("_")[1]
         cursor.execute("DELETE FROM catalog_items WHERE id=?", (item_id,))
         conn.commit()
-        bot.edit_message_text("✅ Товар успешно удален из каталога!", call.message.chat.id, call.message.message_id)
+        edit_text("✅ Товар успешно удален из каталога!", call.message.chat.id, call.message.message_id)
 
     elif call.data == "admin_broadcast":
         if user_id != ADMIN_ID: return
@@ -1192,6 +1338,25 @@ def process_topup_ton_amount(message):
     except (ValueError, AttributeError):
         msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите число (например: `1` или `2.5`):", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_topup_ton_amount)
+
+def process_banner_upload(message, menu_key):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if message.text and message.text.startswith('/'):
+        bot.reply_to(message, "❌ Загрузка баннера отменена.")
+        return
+    if message.content_type != "photo" or not message.photo:
+        msg = bot.reply_to(message, "❌ Нужно отправить именно фото. Попробуйте ещё раз или /cancel:")
+        bot.register_next_step_handler(msg, process_banner_upload, menu_key)
+        return
+
+    file_id = message.photo[-1].file_id
+    cursor.execute("INSERT OR REPLACE INTO banners (menu_key, file_id) VALUES (?, ?)", (menu_key, file_id))
+    conn.commit()
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🖼 К баннерам", callback_data="admin_banners"))
+    bot.reply_to(message, f"✅ Баннер для «{BANNER_MENUS.get(menu_key, menu_key)}» сохранён!", reply_markup=markup)
 
 def process_review_text(message, order_id, rating):
     text = message.text if message.text else "Без текстового отзыва"
