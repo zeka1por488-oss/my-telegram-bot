@@ -5,6 +5,7 @@ from telebot import types
 import time
 import random
 import threading
+import requests
 from flask import Flask
 
 # ==================== FLASK KEEP-ALIVE SERVER ====================
@@ -23,16 +24,20 @@ def keep_alive():
     t.daemon = True
     t.start()
 
-# ==================== НАСТРОЙКИ ====================
+# ==================== НАСТРОЙКИ (ЗАПОЛНЕНО) ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8657141354:AAH_SIZmAGwshiFvbDff_9J8_kNtSvwZ5u4")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "7408654429"))
 MANAGER_USERNAME = "Nazarow927"
 GARANT_USERNAME = "garant_nazarow"
-REVIEWS_CHANNEL_ID = ""  # Укажите ID канала отзывов (например "-100123456789"), если есть
+REQUIRED_CHANNEL = "@nazarowshop"
 
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "4400005572759295")
-CARD_HOLDER = "А-Банк / Карта UAH"
-# ===================================================
+CARD_HOLDER = "А-Банк"
+REVIEWS_CHANNEL_ID = "-1004291767300"
+
+XROCKET_API_KEY = os.environ.get("XROCKET_API_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhcHBJZCI6IjMwMzAwOCIsImp0aSI6ImFwcDozMDMwMDg6NTAyNDFhYWMtY2UxNy00ZDZmLWEwYTMtY2VmM2M3NTc5OWFiIiwiaWF0IjoxNzkwNTk3MDE1fQ.QTDHlScHEBze_LHqE025qq0u7hO9p3NqJrjdtHmKHAg")
+XROCKET_API_URL = "https://pay.mypays.co"
+# ===============================================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -128,25 +133,79 @@ CURRENCY_SYMBOLS = {
 }
 
 REF_REWARDS = {
-    "UAH": (1.5, "грн"),
-    "STARS": (1,5, "⭐"),
-    "RUB": (2.0, "₽")
+    "UAH": (3.0, "грн"),
+    "STARS": (5.0, "⭐"),
+    "RUB": (7.0, "₽")
 }
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+def check_subscription(user_id):
+    """Проверка подписки пользователя на обязательный канал"""
+    if not REQUIRED_CHANNEL:
+        return True
+    try:
+        member = bot.get_chat_member(REQUIRED_CHANNEL, user_id)
+        if member.status in ['creator', 'administrator', 'member']:
+            return True
+        return False
+    except Exception as e:
+        print(f"Ошибка проверки подписки: {e}")
+        return True
+
+def get_sub_keyboard():
+    """Клавиатура с кнопкой ссылки на канал и кнопкой проверки"""
+    markup = types.InlineKeyboardMarkup()
+    channel_url = f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}"
+    btn_sub = types.InlineKeyboardButton("📢 Подписаться на канал", url=channel_url)
+    btn_check = types.InlineKeyboardButton("✅ Я подписался", callback_data="check_subscription")
+    markup.add(btn_sub)
+    markup.add(btn_check)
+    return markup
+
+def create_xrocket_invoice(amount_crypto, currency="TON", description="Пополнение баланса в боте"):
+    """Создание счета на оплату через xRocket API"""
+    headers = {
+        "Rocket-Pay-Key": XROCKET_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "amount": amount_crypto,
+        "currency": currency,
+        "description": description,
+        "numPayments": 1
+    }
+    try:
+        response = requests.post(f"{XROCKET_API_URL}/invoice/create", json=payload, headers=headers)
+        res_data = response.json()
+        if res_data.get("success"):
+            return res_data["data"]
+    except Exception as e:
+        print(f"Ошибка создания инвойса xRocket: {e}")
+    return None
+
+def check_xrocket_invoice(invoice_id):
+    """Проверка статуса оплаты инвойса в xRocket API"""
+    headers = {
+        "Rocket-Pay-Key": XROCKET_API_KEY
+    }
+    try:
+        response = requests.get(f"{XROCKET_API_URL}/invoice/{invoice_id}", headers=headers)
+        res_data = response.json()
+        if res_data.get("success"):
+            status = res_data["data"]["status"]
+            return status == "PAID"
+    except Exception as e:
+        print(f"Ошибка проверки инвойса xRocket: {e}")
+    return False
+
 def convert_currency(amount, from_curr, to_curr):
-    """
-    Универсальная конвертация на основе курса:
-    1 STARS = 0.75 UAH = 2.0 RUB
-    """
-    # Сначала переводим входящую сумму в базовую единицу (STARS)
+    """Универсальная конвертация валют"""
     amount_in_stars = amount
     if from_curr == "UAH":
         amount_in_stars = amount / 0.75
     elif from_curr == "RUB":
         amount_in_stars = amount / 2.0
         
-    # Затем из STARS переводим в нужную валюту пользователя
     if to_curr == "STARS":
         return round(amount_in_stars, 1)
     elif to_curr == "UAH":
@@ -165,6 +224,7 @@ def get_main_menu_text(first_name):
         f"• 📱 Telegram аккаунты (TData / Session+Json)\n"
         f"• ⚡ Виртуальные номера под любые сервисы\n"
         f"• 💎 Telegram Premium и звёзды (Stars)\n\n"
+        f"📢 **Наш канал:** {REQUIRED_CHANNEL}\n"
         f"👨‍💻 **Менеджер / Поддержка:** @{MANAGER_USERNAME}\n\n"
         f"👇 Выберите нужный раздел ниже:"
     )
@@ -182,12 +242,75 @@ def get_main_menu_keyboard():
     markup.add(btn5, btn6)
     return markup
 
+def save_review(order_id, user_id, rating, text, first_name, username):
+    """Сохранение отзыва + авто-начисление бонуса за 5★"""
+    cursor.execute("INSERT INTO reviews (order_id, user_id, rating, review_text) VALUES (?, ?, ?, ?)",
+                   (order_id, user_id, rating, text))
+    conn.commit()
+
+    if rating == 5:
+        cursor.execute("SELECT currency FROM users WHERE user_id=?", (user_id,))
+        u_curr_row = cursor.fetchone()
+        u_curr = u_curr_row[0] if u_curr_row else "UAH"
+        
+        bonus_val = 10.0 if u_curr == "UAH" else (15.0 if u_curr == "STARS" else 25.0)
+        sym = CURRENCY_SYMBOLS.get(u_curr, "грн")
+
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (bonus_val, user_id))
+        conn.commit()
+
+        try:
+            bot.send_message(
+                user_id, 
+                f"🎉 **Спасибо за отзыв 5★!**\n💰 Вам автоматически зачислено **+{bonus_val} {sym}** на баланс!", 
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+    cursor.execute("SELECT item_name FROM orders WHERE order_id=?", (order_id,))
+    res = cursor.fetchone()
+    item_name = res[0] if res else "Товар"
+
+    user_str = f"@{username}" if username else first_name
+    stars_str = "⭐" * int(rating)
+
+    review_msg = (
+        f"📣 **Новый отзыв о покупке!**\n\n"
+        f"📦 Товар: **{item_name}** (Заказ #{order_id})\n"
+        f"👤 Покупатель: {user_str}\n"
+        f"⭐️ Оценка: **{stars_str}** ({rating}/5)\n"
+        f"💬 Отзыв: _{text}_"
+    )
+
+    try:
+        bot.send_message(ADMIN_ID, review_msg, parse_mode="Markdown")
+    except Exception:
+        pass
+
+    if REVIEWS_CHANNEL_ID:
+        try:
+            bot.send_message(REVIEWS_CHANNEL_ID, review_msg, parse_mode="Markdown")
+        except Exception as e:
+            print(f"Ошибка отправки в канал отзывов: {e}")
+
 # ==================== КОМАНДЫ ====================
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
     bot.clear_step_handler_by_chat_id(chat_id=message.chat.id)
     
+    # ПРОВЕРКА ПОДПИСКИ НА КАНАЛ
+    if not check_subscription(user_id):
+        text = (
+            f"👋 **Привет, {message.from_user.first_name}!**\n\n"
+            f"⚠️ **Для доступа к боту необходимо подписаться на наш официальный канал:**\n"
+            f"👉 {REQUIRED_CHANNEL}\n\n"
+            f"После подписки нажмите кнопку **«✅ Я подписался»** ниже:"
+        )
+        bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=get_sub_keyboard())
+        return
+
     cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
     existing_user = cursor.fetchone()
     
@@ -285,6 +408,27 @@ def callback(call):
     bot.answer_callback_query(call.id)
     user_id = call.from_user.id
     
+    # ОБРАБОТКА КНОПКИ «Я ПОДПИСАЛСЯ»
+    if call.data == "check_subscription":
+        if check_subscription(user_id):
+            bot.answer_callback_query(call.id, "✅ Подписка подтверждена!", show_alert=False)
+            text = get_main_menu_text(call.from_user.first_name)
+            markup = get_main_menu_keyboard()
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        else:
+            bot.answer_callback_query(call.id, "❌ Вы всё ещё не подписаны на канал!", show_alert=True)
+        return
+
+    # БЛОКИРОВКА ИСПОЛЬЗОВАНИЯ БОТА БЕЗ ПОДПИСКИ
+    if not check_subscription(user_id):
+        bot.answer_callback_query(call.id, "⚠️ Доступ ограничен! Подпишитесь на канал.", show_alert=True)
+        text = (
+            f"⚠️ **Для продолжения работы подпишитесь на наш канал:**\n"
+            f"👉 {REQUIRED_CHANNEL}"
+        )
+        bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=get_sub_keyboard())
+        return
+
     cursor.execute("SELECT balance, currency, last_bonus FROM users WHERE user_id=?", (user_id,))
     u_row = cursor.fetchone()
     if not u_row:
@@ -467,7 +611,7 @@ def callback(call):
             "• Замена товара или возврат осуществляется при наличии видеозаписи с момента покупки.\n"
             "• Время на замену невалида — 20 минут с момента выдачи.\n\n"
             "💳 **Пополнение и Оплата:**\n"
-            "• Автоматическое зачисление после подтверждения платежа админом.\n"
+            "• Автоматическое зачисление через xRocket или под подтверждение админом.\n"
             "• В случае вопросов по оплате пишите менеджеру: @" + MANAGER_USERNAME
         )
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
@@ -487,7 +631,8 @@ def callback(call):
             bot.send_message(
                 client_id, 
                 f"🎉 **Заказ #{order_id} выполнен!** Менеджер подтвердил выдачу товара.\n\n"
-                f"⭐ **Пожалуйста, оцените качество обслуживания:**", 
+                f"⭐ **Пожалуйста, оцените качество обслуживания:**\n"
+                f"💡 *За отзыв 5★ вы автоматически получите бонус на баланс!*", 
                 parse_mode="Markdown",
                 reply_markup=markup
             )
@@ -536,13 +681,15 @@ def callback(call):
         text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{balance:.2f} {sym}**\n🌐 Выбранная валюта: **{curr}**"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
 
-    # ВЫБОР МЕТОДА ПОПОЛНЕНИЯ БАЛАНСА
     elif call.data == "top_up_balance":
         markup = types.InlineKeyboardMarkup()
         b_uah = types.InlineKeyboardButton("💳 UAH (Карта)", callback_data="topup_method_uah")
         b_stars = types.InlineKeyboardButton("⭐ STARS (Telegram Подарок)", callback_data="topup_method_stars")
+        b_xrocket = types.InlineKeyboardButton("🚀 xRocket (TON / Crypto)", callback_data="topup_method_xrocket")
         b_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
+        
         markup.add(b_uah, b_stars)
+        markup.add(b_xrocket)
         markup.add(b_back)
 
         bot.edit_message_text(
@@ -572,6 +719,55 @@ def callback(call):
             parse_mode="Markdown"
         )
         bot.register_next_step_handler(msg, process_topup_stars_amount)
+
+    elif call.data == "topup_method_xrocket":
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        msg = bot.send_message(
+            call.message.chat.id, 
+            "🚀 **Пополнение через xRocket (TON)**\n\n"
+            "Введите сумму в **TON**, на которую хотите пополнить (например: `0.5`, `1` или `5`):", 
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, process_topup_xrocket)
+
+    elif call.data.startswith("check_xr_"):
+        parts = call.data.split("_")
+        invoice_id = parts[2]
+        payment_db_id = parts[3]
+
+        cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_db_id,))
+        p_row = cursor.fetchone()
+
+        if not p_row:
+            bot.send_message(call.message.chat.id, "❌ Заявка не найдена!")
+            return
+
+        p_amount, p_status = p_row
+
+        if p_status == "completed":
+            bot.answer_callback_query(call.id, "✅ Эта оплата уже зачислена!", show_alert=True)
+            return
+
+        if check_xrocket_invoice(invoice_id):
+            cursor.execute("SELECT currency FROM users WHERE user_id=?", (user_id,))
+            u_curr = cursor.fetchone()[0]
+
+            final_amount = convert_currency(p_amount, "STARS", u_curr)
+
+            cursor.execute("UPDATE payments SET status='completed' WHERE payment_id=?", (payment_db_id,))
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (final_amount, user_id))
+            conn.commit()
+
+            sym = CURRENCY_SYMBOLS.get(u_curr, "")
+            bot.edit_message_text(
+                f"🎉 **Оплата успешно подтверждена!**\n\n"
+                f"💰 На ваш баланс зачислено: **+{final_amount:.2f} {sym}**",
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode="Markdown"
+            )
+        else:
+            bot.answer_callback_query(call.id, "❌ Оплата еще не поступила! Сначала оплатите чек в xRocket.", show_alert=True)
 
     elif call.data.startswith("paid_"):
         payment_id = call.data.split("_", 1)[1]
@@ -616,7 +812,6 @@ def callback(call):
         except Exception as e:
             print(f"Ошибка отправки админу: {e}")
 
-    # ПОДТВЕРЖДЕНИЕ ОТПРАВКИ ПОДАРКА STARS
     elif call.data.startswith("paidstars_"):
         payment_id = call.data.split("_", 1)[1]
         cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
@@ -674,12 +869,10 @@ def callback(call):
             bot.answer_callback_query(call.id, "⚠️ Платеж уже обработан!", show_alert=True)
             return
 
-        # Получаем текущую валюту пользователя
         cursor.execute("SELECT currency FROM users WHERE user_id=?", (p_uid,))
         u_curr_row = cursor.fetchone()
         u_curr = u_curr_row[0] if u_curr_row else "UAH"
 
-        # Входящий платеж был в UAH, конвертируем в валюту профиля
         final_amount = convert_currency(p_amount, "UAH", u_curr)
 
         cursor.execute("UPDATE payments SET status='completed' WHERE payment_id=?", (payment_id,))
@@ -702,15 +895,13 @@ def callback(call):
 
         p_uid, p_amount, p_status = p_row
         if p_status == "completed":
-            bot.answer_callback_query(call.id, "⚠️ Эти заявка уже обработана!", show_alert=True)
+            bot.answer_callback_query(call.id, "⚠️ Эта заявка уже обработана!", show_alert=True)
             return
 
-        # Получаем текущую валюту пользователя
         cursor.execute("SELECT currency FROM users WHERE user_id=?", (p_uid,))
         u_curr_row = cursor.fetchone()
         u_curr = u_curr_row[0] if u_curr_row else "STARS"
 
-        # Входящий платеж был в STARS, конвертируем в валюту профиля
         final_amount = convert_currency(p_amount, "STARS", u_curr)
 
         cursor.execute("UPDATE payments SET status='completed' WHERE payment_id=?", (payment_id,))
@@ -753,7 +944,6 @@ def callback(call):
     elif call.data.startswith("set_curr_"):
         new_curr = call.data.split("_")[2]
         
-        # Проверка баланса перед сменой валюты
         cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
         current_bal = cursor.fetchone()[0]
         
@@ -962,42 +1152,60 @@ def process_topup_stars_amount(message):
         msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите только целое число (например: `50` или `100`):", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_topup_stars_amount)
 
+def process_topup_xrocket(message):
+    if message.text and message.text.startswith('/'):
+        return
+
+    try:
+        amount_ton = float(message.text.replace(",", ".").strip())
+        if amount_ton <= 0:
+            msg = bot.reply_to(message, "❌ Сумма должна быть больше 0 TON.\nВведите сумму ещё раз:")
+            bot.register_next_step_handler(msg, process_topup_xrocket)
+            return
+
+        user_id = message.from_user.id
+        payment_db_id = f"payxr_{user_id}_{int(time.time())}"
+
+        invoice_data = create_xrocket_invoice(amount_ton, currency="TON", description=f"Пополнение баланса #{user_id}")
+
+        if not invoice_data:
+            bot.send_message(message.chat.id, "❌ Ошибка связи с xRocket API. Попробуйте позже или выберите другой способ оплаты.")
+            return
+
+        invoice_id = invoice_data["id"]
+        pay_url = invoice_data["linkUrl"]
+
+        cursor.execute("INSERT INTO payments (payment_id, user_id, amount) VALUES (?, ?, ?)", (payment_db_id, user_id, amount_ton))
+        conn.commit()
+
+        markup = types.InlineKeyboardMarkup()
+        btn_pay = types.InlineKeyboardButton("💳 Оплатить в xRocket", url=pay_url)
+        btn_check = types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_xr_{invoice_id}_{payment_db_id}")
+        btn_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
+        
+        markup.add(btn_pay)
+        markup.add(btn_check)
+        markup.add(btn_back)
+
+        text = (
+            f"🚀 **Счет на оплату через xRocket создан!**\n\n"
+            f"💰 Сумма: **{amount_ton} TON**\n"
+            f"🆔 ID счета: `{invoice_id}`\n\n"
+            f"📌 **Инструкция:**\n"
+            f"1. Нажмите кнопку **«Оплатить в xRocket»** и подтвердите перевод.\n"
+            f"2. После оплаты вернитесь сюда и нажмите **«Проверить оплату»**."
+        )
+        bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
+
+    except ValueError:
+        msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите число (например: `0.5` или `2`):", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_topup_xrocket)
+
 def process_review_text(message, order_id, rating):
     text = message.text if message.text else "Без текстового отзыва"
     user_id = message.from_user.id
     save_review(order_id, user_id, rating, text, message.from_user.first_name, message.from_user.username)
     bot.reply_to(message, "🎉 **Спасибо за ваш отзыв!** Мы ценим ваше мнение.", parse_mode="Markdown")
-
-def save_review(order_id, user_id, rating, text, first_name, username):
-    cursor.execute("INSERT INTO reviews (order_id, user_id, rating, review_text) VALUES (?, ?, ?, ?)",
-                   (order_id, user_id, rating, text))
-    conn.commit()
-
-    cursor.execute("SELECT item_name FROM orders WHERE order_id=?", (order_id,))
-    res = cursor.fetchone()
-    item_name = res[0] if res else "Товар"
-
-    user_str = f"@{username}" if username else first_name
-    stars_str = "⭐" * int(rating)
-
-    review_msg = (
-        f"📣 **Новый отзыв о покупке!**\n\n"
-        f"📦 Товар: **{item_name}** (Заказ #{order_id})\n"
-        f"👤 Покупатель: {user_str}\n"
-        f"⭐️ Оценка: **{stars_str}** ({rating}/5)\n"
-        f"💬 Отзыв: _{text}_"
-    )
-
-    try:
-        bot.send_message(ADMIN_ID, review_msg, parse_mode="Markdown")
-    except Exception:
-        pass
-
-    if REVIEWS_CHANNEL_ID:
-        try:
-            bot.send_message(REVIEWS_CHANNEL_ID, review_msg, parse_mode="Markdown")
-        except Exception as e:
-            print(f"Ошибка отправки в канал отзывов: {e}")
 
 def process_broadcast(message):
     if message.from_user.id != ADMIN_ID: return
@@ -1029,7 +1237,7 @@ def process_add_item(message):
         name = parts[0]
         
         if len(parts) == 1:
-            bot.reply_to(message, "❌ Забыли указать хотя бы цену! Пример:\n`+380991234567, Номера, 100`")
+            bot.reply_to(message, "❌ Забыли указать цену! Пример:\n`+380991234567, Номера, 100`")
             return
             
         category = parts[1] if len(parts) > 2 else "🔥 Разное"
@@ -1087,7 +1295,7 @@ def process_promo_activation(message):
 
     bot.reply_to(message, f"🎉 **Промокод активирован!** Вам зачислено **{reward:.2f}** на баланс.", parse_mode="Markdown")
 
-# ==================== ЗАПУСК БОТАИ СЕРВЕРА ====================
+# ==================== ЗАПУСК БОТА И СЕРВЕРА ====================
 if __name__ == '__main__':
     keep_alive()
     print("🤖 Бот запущен и готов к работе!")
