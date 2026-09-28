@@ -37,9 +37,6 @@ REVIEWS_CHANNEL_ID = "-1004291767300"
 
 # Реквизиты TON кошелька для прямой оплаты
 TON_WALLET = "UQC1PIFE4zI6qZmOxn72gCyQWWSq1Uax4kgeOGnTdICT-cC"
-
-XROCKET_API_KEY = os.environ.get("XROCKET_API_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhcHBJZCI6IjMwMzAwOCIsImp0aSI6ImFwcDozMDMwMDg6NTAyNDFhYWMtY2UxNy00ZDZmLWEwYTMtY2VmM2M3NTc5OWFiIiwiaWF0IjoxNzkwNTk3MDE1fQ.QTDHlScHEBze_LHqE025qq0u7hO9p3NqJrjdtHmKHAg")
-XROCKET_API_URL = "https://pay.mcracken.com"
 # ===============================================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -754,45 +751,6 @@ def callback(call):
         else:
             bot.answer_callback_query(call.id, "❌ Перевод еще не найден в сети TON. Подождите 10-30 секунд и нажмите снова.", show_alert=True)
 
-    elif call.data.startswith("check_xr_"):
-        parts = call.data.split("_")
-        invoice_id = parts[2]
-        payment_db_id = parts[3]
-
-        cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_db_id,))
-        p_row = cursor.fetchone()
-
-        if not p_row:
-            bot.send_message(call.message.chat.id, "❌ Заявка не найдена!")
-            return
-
-        p_amount, p_status = p_row
-
-        if p_status == "completed":
-            bot.answer_callback_query(call.id, "✅ Эта оплата уже зачислена!", show_alert=True)
-            return
-
-        if check_xrocket_invoice(invoice_id):
-            cursor.execute("SELECT currency FROM users WHERE user_id=?", (user_id,))
-            u_curr = cursor.fetchone()[0]
-
-            final_amount = convert_currency(float(p_amount), "STARS", u_curr)
-
-            cursor.execute("UPDATE payments SET status='completed' WHERE payment_id=?", (payment_db_id,))
-            cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (final_amount, user_id))
-            conn.commit()
-
-            sym = CURRENCY_SYMBOLS.get(u_curr, "")
-            bot.edit_message_text(
-                f"🎉 **Оплата успешно подтверждена!**\n\n"
-                f"💰 На ваш баланс зачислено: **+{final_amount:.2f} {sym}**",
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode="Markdown"
-            )
-        else:
-            bot.answer_callback_query(call.id, "❌ Оплата еще не поступила! Сначала оплатите чек в xRocket.", show_alert=True)
-
     elif call.data.startswith("paidstars_"):
         payment_id = call.data.split("_", 1)[1]
         cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
@@ -896,7 +854,6 @@ def callback(call):
         u_curr_row = cursor.fetchone()
         u_curr = u_curr_row[0] if u_curr_row else "UAH"
 
-        # Если платеж звёздами (ID начинается с paystars_)
         if payment_id.startswith("paystars_"):
             final_amount = convert_currency(float(p_amount), "STARS", u_curr)
         else:
@@ -1142,7 +1099,7 @@ def process_topup_stars_amount(message):
             f"⭐ **Пополнение баланса Звёздами (#{payment_id})**\n\n"
             f"💰 Сумма к оплате: **{amount} ⭐**\n\n"
             f"📌 **Куда переводить звёзды:**\n"
-            f"👤 Получатель: **@{GARANT_USERNAME}**\n\n"
+            f"👤 Юзернейм (реквизиты): **@{GARANT_USERNAME}**\n\n"
             "⚠️ **Инструкция:**\n"
             f"1. Нажмите кнопку **«⭐ Отправить звёзды»** и переведите ровно **{amount} ⭐** на аккаунт `@{GARANT_USERNAME}`.\n"
             "2. После отправки вернитесь сюда и нажмите кнопку **«✅ Я отправил звёзды»**."
@@ -1197,55 +1154,6 @@ def process_topup_ton(message):
     except ValueError:
         msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите число (например: `0.5` или `2`):", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_topup_ton)
-
-def process_topup_xrocket(message):
-    if message.text and message.text.startswith('/'):
-        return
-
-    try:
-        amount_ton = float(message.text.replace(",", ".").strip())
-        if amount_ton <= 0:
-            msg = bot.reply_to(message, "❌ Сумма должна быть больше 0 TON.\nВведите сумму ещё раз:")
-            bot.register_next_step_handler(msg, process_topup_xrocket)
-            return
-
-        user_id = message.from_user.id
-        payment_db_id = f"payxr_{user_id}_{int(time.time())}"
-
-        invoice_data = create_xrocket_invoice(amount_ton, currency="TON", description=f"Пополнение баланса #{user_id}")
-
-        if not invoice_data:
-            bot.send_message(message.chat.id, "❌ Ошибка связи с xRocket API. Попробуйте позже или выберите другой способ оплаты.")
-            return
-
-        invoice_id = invoice_data["id"]
-        pay_url = invoice_data.get("linkUrl") or invoice_data.get("link")
-
-        cursor.execute("INSERT INTO payments (payment_id, user_id, amount) VALUES (?, ?, ?)", (payment_db_id, user_id, amount_ton))
-        conn.commit()
-
-        markup = types.InlineKeyboardMarkup()
-        btn_pay = types.InlineKeyboardButton("💳 Оплатить в xRocket", url=pay_url)
-        btn_check = types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_xr_{invoice_id}_{payment_db_id}")
-        btn_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
-        
-        markup.add(btn_pay)
-        markup.add(btn_check)
-        markup.add(btn_back)
-
-        text = (
-            f"🚀 **Счет на оплату через xRocket создан!**\n\n"
-            f"💰 Сумма: **{amount_ton} TON**\n"
-            f"🆔 ID счета: `{invoice_id}`\n\n"
-            f"📌 **Инструкция:**\n"
-            f"1. Нажмите кнопку **«Оплатить в xRocket»** и подтвердите перевод.\n"
-            f"2. После оплаты вернитесь сюда и нажмите **«Проверить оплату»**."
-        )
-        bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
-
-    except ValueError:
-        msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите число (например: `0.5` или `2`):", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, process_topup_xrocket)
 
 def process_review_text(message, order_id, rating):
     text = message.text if message.text else "Без текстового отзыва"
