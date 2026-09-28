@@ -31,6 +31,11 @@ GARANT_USERNAME = "garant_nazarow"
 GARANT_MD = GARANT_USERNAME.replace("_", "\\_")  # экранирование _ для Markdown
 REQUIRED_CHANNEL = "@nazarowshop"
 
+# --- TON ---
+TON_WALLET = os.environ.get("TON_WALLET", "UQC1PIFE4zI6qZmOxn72gCyQWWSq1Uax4kgeOGnTdICT-cC-")
+# Курс: сколько грн стоит 1 TON. ОБЯЗАТЕЛЬНО поставьте актуальный (можно через переменную TON_RATE_UAH)
+TON_RATE_UAH = float(os.environ.get("TON_RATE_UAH", "55"))
+
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "4400005572759295")
 CARD_HOLDER = "А-Банк / Карта UAH"
 REVIEWS_CHANNEL_ID = "-1004291767300"
@@ -164,7 +169,9 @@ def convert_currency(amount, from_curr, to_curr):
     1 STARS = 0.75 UAH = 2.0 RUB
     """
     amount_in_stars = amount
-    if from_curr == "UAH":
+    if from_curr == "TON":
+        amount_in_stars = amount * TON_RATE_UAH / 0.75
+    elif from_curr == "UAH":
         amount_in_stars = amount / 0.75
     elif from_curr == "RUB":
         amount_in_stars = amount / 2.0
@@ -645,7 +652,9 @@ def callback(call):
         b_uah = types.InlineKeyboardButton("💳 UAH (Карта)", callback_data="topup_method_uah")
         b_stars = types.InlineKeyboardButton("⭐ STARS (Telegram Подарок)", callback_data="topup_method_stars")
         b_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
+        b_ton = types.InlineKeyboardButton("💎 TON (Кошелёк)", callback_data="topup_method_ton")
         markup.add(b_uah, b_stars)
+        markup.add(b_ton)
         markup.add(b_back)
 
         bot.edit_message_text(
@@ -675,6 +684,90 @@ def callback(call):
             parse_mode="Markdown"
         )
         bot.register_next_step_handler(msg, process_topup_stars_amount)
+
+    elif call.data == "topup_method_ton":
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        msg = bot.send_message(
+            call.message.chat.id,
+            "💎 **Пополнение баланса через TON**\n\n"
+            f"Курс: 1 TON ≈ {TON_RATE_UAH:g} грн\n\n"
+            "Введите количество **TON**, на которое хотите пополнить (например: `1` или `2.5`):",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, process_topup_ton_amount)
+
+    elif call.data.startswith("paidton_"):
+        payment_id = call.data.split("_", 1)[1]
+        cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
+        p_row = cursor.fetchone()
+
+        if not p_row:
+            bot.send_message(call.message.chat.id, "❌ Заявка не найдена!")
+            return
+
+        p_amount, p_status = p_row
+
+        if p_status == "completed":
+            bot.send_message(call.message.chat.id, "✅ Этот платёж уже был зачислен!")
+            return
+
+        bot.edit_message_text(
+            f"⏳ **Заявка на проверку TON-перевода отправлена!**\n\n"
+            f"💎 Сумма: **{p_amount:g} TON**\n"
+            f"🆔 ID заявки: `{payment_id}`\n\n"
+            "Администратор проверит поступление и зачислит баланс.",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+
+        username = f"@{call.from_user.username}" if call.from_user.username else "без username"
+        adm_markup = types.InlineKeyboardMarkup()
+        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить (Начислить)", callback_data=f"admconfirmton_{payment_id}")
+        btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admreject_{payment_id}")
+        adm_markup.add(btn_confirm, btn_reject)
+
+        adm_text = (
+            f"💎 **ЗАЯВКА НА ПОПОЛНЕНИЕ TON!**\n\n"
+            f"👤 Покупатель: {call.from_user.first_name} ({username})\n"
+            f"🆔 ID пользователя: `{user_id}`\n"
+            f"💎 Ожидаемая сумма: **{p_amount:g} TON**\n"
+            f"🧾 Комментарий к переводу (должен совпадать): `{payment_id}`\n\n"
+            f"📌 Проверьте поступление на кошелёк и нажмите кнопку ниже:"
+        )
+        try:
+            bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
+        except Exception as e:
+            print(f"Ошибка отправки админу: {e}")
+
+    elif call.data.startswith("admconfirmton_"):
+        if user_id != ADMIN_ID: return
+        payment_id = call.data.split("_", 1)[1]
+
+        cursor.execute("SELECT user_id, amount, status FROM payments WHERE payment_id=?", (payment_id,))
+        p_row = cursor.fetchone()
+        if not p_row: return
+
+        p_uid, p_amount, p_status = p_row
+        if p_status == "completed":
+            bot.answer_callback_query(call.id, "⚠️ Эта заявка уже обработана!", show_alert=True)
+            return
+
+        cursor.execute("SELECT currency FROM users WHERE user_id=?", (p_uid,))
+        u_curr_row = cursor.fetchone()
+        u_curr = u_curr_row[0] if u_curr_row else "UAH"
+
+        final_amount = convert_currency(p_amount, "TON", u_curr)
+
+        cursor.execute("UPDATE payments SET status='completed' WHERE payment_id=?", (payment_id,))
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (final_amount, p_uid))
+        conn.commit()
+
+        sym = CURRENCY_SYMBOLS.get(u_curr, "")
+        bot.edit_message_text(f"✅ TON-платёж подтверждён! Пользователю {p_uid} зачислено +{final_amount:.2f} {sym}.", call.message.chat.id, call.message.message_id)
+        try:
+            bot.send_message(p_uid, f"🎉 **Платёж TON подтверждён!**\n\n💰 На ваш баланс зачислено: **+{final_amount:.2f} {sym}**", parse_mode="Markdown")
+        except Exception: pass
 
     elif call.data.startswith("paid_"):
         payment_id = call.data.split("_", 1)[1]
@@ -1058,6 +1151,47 @@ def process_topup_stars_amount(message):
     except ValueError:
         msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите только целое число (например: `50` или `100`):", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_topup_stars_amount)
+
+def process_topup_ton_amount(message):
+    if message.text and message.text.startswith('/'):
+        return
+
+    try:
+        amount = float(message.text.replace(",", ".").strip())
+        if amount <= 0:
+            msg = bot.reply_to(message, "❌ Сумма должна быть больше 0 TON.\nВведите количество TON ещё раз:")
+            bot.register_next_step_handler(msg, process_topup_ton_amount)
+            return
+
+        amount = round(amount, 4)
+        user_id = message.from_user.id
+        payment_id = f"payton_{user_id}_{int(time.time())}"
+
+        cursor.execute("INSERT INTO payments (payment_id, user_id, amount) VALUES (?, ?, ?)", (payment_id, user_id, amount))
+        conn.commit()
+
+        markup = types.InlineKeyboardMarkup()
+        btn_paid = types.InlineKeyboardButton("✅ Я оплатил", callback_data=f"paidton_{payment_id}")
+        btn_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
+        markup.add(btn_paid)
+        markup.add(btn_back)
+
+        text = (
+            f"💎 **Пополнение баланса через TON**\n\n"
+            f"💰 Сумма к оплате: **{amount:g} TON**\n\n"
+            f"📌 **Инструкция:**\n"
+            f"1. Переведите ровно **{amount:g} TON** на кошелёк:\n"
+            f"`{TON_WALLET}`\n\n"
+            f"2. В поле **Комментарий (Memo)** обязательно укажите:\n"
+            f"`{payment_id}`\n\n"
+            f"3. После перевода нажмите кнопку **«✅ Я оплатил»** ниже.\n\n"
+            f"⚠️ Без комментария платёж могут не засчитать."
+        )
+        bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
+
+    except (ValueError, AttributeError):
+        msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите число (например: `1` или `2.5`):", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_topup_ton_amount)
 
 def process_review_text(message, order_id, rating):
     text = message.text if message.text else "Без текстового отзыва"
