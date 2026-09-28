@@ -35,7 +35,7 @@ REQUIRED_CHANNEL = "@nazarowshop"
 # --- TON ---
 TON_WALLET = os.environ.get("TON_WALLET", "UQC1PIFE4zI6qZmOxn72gCyQWWSq1Uax4kgeOGnTdICT-cC-")
 # Курс: сколько грн стоит 1 TON. ОБЯЗАТЕЛЬНО поставьте актуальный (можно через переменную TON_RATE_UAH)
-TON_RATE_UAH = float(os.environ.get("TON_RATE_UAH", "55"))
+TON_RATE_UAH = float(os.environ.get("TON_RATE_UAH", "65"))
 
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "4400005572759295")
 CARD_HOLDER = "А-Банк / Карта UAH"
