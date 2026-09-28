@@ -675,7 +675,7 @@ def callback(call):
         bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
         msg = bot.send_message(
             call.message.chat.id, 
-            "⭐ **Пополнение баланса Звёздами (Telegram Gifts)**\n\n"
+            "⭐ **Пополнение баланса Звёздами (Telegram Stars)**\n\n"
             "Введите количество звёзд, на которое хотите пополнить (например: `50`, `100`, `500`):", 
             parse_mode="Markdown"
         )
@@ -752,10 +752,10 @@ def callback(call):
         stars_val = int(float(p_amount))
 
         bot.edit_message_text(
-            f"⏳ **Заявка на проверку подарка отправлена!**\n\n"
+            f"⏳ **Заявка на проверку звезд отправлена!**\n\n"
             f"⭐ Заявлено: **{stars_val} ⭐**\n"
             f"🆔 ID заявки: `{payment_id}`\n\n"
-            f"Администратор проверит получение подарка на **@{GARANT_USERNAME}** и зачислит баланс.",
+            f"Администратор проверит перевод звёзд и зачислит баланс.",
             call.message.chat.id,
             call.message.message_id,
             parse_mode="Markdown"
@@ -763,17 +763,16 @@ def callback(call):
 
         username = f"@{call.from_user.username}" if call.from_user.username else "без username"
         adm_markup = types.InlineKeyboardMarkup()
-        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить (Начислить)", callback_data=f"admconfirmstars_{payment_id}")
+        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admconfirmstars_{payment_id}")
         btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admreject_{payment_id}")
         adm_markup.add(btn_confirm, btn_reject)
 
         adm_text = (
-            f"🎁 **ЗАЯВКА НА ПОПОЛНЕНИЕ ЗВЁЗДАМИ (GIFT)!**\n\n"
+            f"⭐ **ЗАЯВКА НА ПОПОЛНЕНИЕ ЗВЁЗДАМИ!**\n\n"
             f"👤 Покупатель: {call.from_user.first_name} ({username})\n"
             f"🆔 ID пользователя: `{user_id}`\n"
-            f"⭐ Ожидаемый подарок на сумму: **{stars_val} ⭐**\n"
-            f"🧾 ID заявки: `{payment_id}`\n\n"
-            f"📌 **Проверьте получение подарка на @{GARANT_USERNAME}** и нажмите кнопку ниже:"
+            f"⭐ Сумма: **{stars_val} ⭐**\n"
+            f"🧾 ID заявки: `{payment_id}`"
         )
         try:
             bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
@@ -880,9 +879,9 @@ def callback(call):
         conn.commit()
 
         sym = CURRENCY_SYMBOLS.get(u_curr, "")
-        bot.edit_message_text(f"✅ **Подарок подтверждён!** Пользователю `{p_uid}` зачислено **+{final_amount:.2f} {sym}**.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"✅ **Звёзды подтверждены!** Пользователю `{p_uid}` зачислено **+{final_amount:.2f} {sym}**.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
         try:
-            bot.send_message(p_uid, f"🎉 **Подарок проверен и подтверждён!**\n\n⭐ На ваш баланс зачислено: **+{final_amount:.2f} {sym}**", parse_mode="Markdown")
+            bot.send_message(p_uid, f"🎉 **Перевод звёзд проверен и подтверждён!**\n\n⭐ На ваш баланс зачислено: **+{final_amount:.2f} {sym}**", parse_mode="Markdown")
         except Exception: pass
 
     elif call.data.startswith("admconfirmton_"):
@@ -929,7 +928,7 @@ def callback(call):
 
         bot.edit_message_text(f"❌ **Заявка #{payment_id} отклонена.**", call.message.chat.id, call.message.message_id)
         try:
-            bot.send_message(p_uid, f"❌ **Заявка на пополнение была отклонена.** Средства/подарок не поступили.", parse_mode="Markdown")
+            bot.send_message(p_uid, f"❌ **Заявка на пополнение была отклонена.** Средства/звёзды не поступили.", parse_mode="Markdown")
         except Exception: pass
 
     elif call.data == "change_currency":
@@ -1136,18 +1135,17 @@ def process_topup_stars_amount(message):
         conn.commit()
 
         markup = types.InlineKeyboardMarkup()
-        btn_paid = types.InlineKeyboardButton("🎁 Я отправил подарок", callback_data=f"paidstars_{payment_id}")
+        btn_paid = types.InlineKeyboardButton("✅ Я оплатил звезды", callback_data=f"paidstars_{payment_id}")
         btn_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
         markup.add(btn_paid)
         markup.add(btn_back)
 
         text = (
-            f"⭐ **Пополнение баланса Звёздами (Telegram Gift)**\n\n"
-            f"💰 Заявленная сумма: **{amount} ⭐**\n\n"
-            f"📌 **Инструкция по пополнению:**\n"
-            f"1. Отправьте Telegram-подарок (например, Кольцо / Gift) эквивалентом **{amount} ⭐** на профиль:\n"
-            f"👉 **@{GARANT_USERNAME}**\n\n"
-            f"2. После успешной отправки подарка нажмите кнопку **«🎁 Я отправил подарок»** ниже."
+            f"⭐ **Пополнение баланса Звёздами #{payment_id}**\n\n"
+            f"💰 Сумма к оплате: **{amount} ⭐**\n\n"
+            f"📌 **Инструкция по оплате:**\n"
+            f"1. Переведите/отправьте ровно **{amount} ⭐** (через официальный механизм Telegram Stars или на нашего гаранта: **@{GARANT_USERNAME}**).\n"
+            f"2. После успешной оплаты нажмите кнопку **«✅ Я оплатил звезды»** ниже, чтобы отправить заявку администратору."
         )
         bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
