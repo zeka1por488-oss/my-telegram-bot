@@ -646,10 +646,12 @@ def callback(call):
         msg = bot.send_message(
             call.message.chat.id, 
             "➕ **Добавление товара / номера**\n\n"
-            "Отправьте данные через запятую:\n"
-            "`Название/Номер, Категория, Цена_UAH, Цена_STARS, Цена_RUB`\n\n"
-            "*Пример 1:*\n`+380991234567, 📲 Номера, 150, 200, 350`\n\n"
-            "*Пример 2 (простой):*\n`TG Премиум 1 мес, 💎 Премиум, 120`", 
+            "Пишите **название и цену в грн** — цены в ⭐ и ₽ посчитаются сами по курсу.\n\n"
+            "`Название, Цена_грн`\n"
+            "`Название, Категория, Цена_грн`\n\n"
+            "*Пример:*\n`США +1, 100`\n`+380991234567, 📲 Номера, 150`\n\n"
+            "📋 Можно сразу несколько — каждый товар с новой строки.\n"
+            "Десятичные — через точку (`2.5`).", 
             parse_mode="Markdown"
         )
         bot.register_next_step_handler(msg, process_add_item)
@@ -941,7 +943,7 @@ def callback(call):
         text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{balance:.2f} {sym}**\n🌐 Выбранная валюта: **{curr}**"
         show_menu(call.message, "profile", text, markup)
 
-    # ==================== ВЫБОР МЕТОДА ПОПОЛНЕНИЯ БАЛАНСА ====================
+    # ==================== ВЫБОР МЕТОДА ПОПОЛНЕНИЯ БАЛАНСА (ТОЧНО КАК В MAIN 3) ====================
     elif call.data == "top_up_balance":
         markup = types.InlineKeyboardMarkup()
         b_uah = types.InlineKeyboardButton("💳 UAH (Карта)", callback_data="topup_method_uah")
@@ -1884,39 +1886,54 @@ def process_broadcast(message):
     )
 
 def process_add_item(message):
-    try:
-        parts = [p.strip() for p in message.text.split(",")]
-        name = parts[0]
-        
-        if len(parts) == 1:
-            bot.reply_to(message, "❌ Забыли указать хотя бы цену! Пример:\n`+380991234567, Номера, 100`")
-            return
-            
-        category = parts[1] if len(parts) > 2 else "🔥 Разное"
-        p_uah = float(parts[2]) if len(parts) > 2 else float(parts[1])
-        p_stars = float(parts[3]) if len(parts) > 3 else round(p_uah * 1.5, 1)
-        p_rub = float(parts[4]) if len(parts) > 4 else round(p_uah * 2.5, 2)
-        
-        cursor.execute("INSERT INTO catalog_items (name, category, price_uah, price_stars, price_rub) VALUES (?, ?, ?, ?, ?)", 
-                       (name, category, p_uah, p_stars, p_rub))
-        conn.commit()
-        
-        bot.reply_to(
-            message, 
-            f"✅ Товар/номер **{name}** успешно добавлен!\n\n"
-            f"📂 Категория: **{category}**\n"
-            f"💰 Цены: **{p_uah} грн** | **{p_stars} ⭐** | **{p_rub} ₽**", 
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        print(f"Ошибка добавления товара: {e}")
-        bot.reply_to(
-            message, 
-            "❌ **Ошибка формата!** Отправьте вот так:\n"
-            "`Название, Категория, Цена_UAH`\n\n"
-            "*Пример:*\n`+380991234567, Номера, 150`", 
-            parse_mode="Markdown"
-        )
+    """Добавление товаров. Можно несколько за раз — каждый товар с новой строки.
+    Формат строки: Название, Цена_грн   или   Название, Категория, Цена_грн
+    Цены в звёздах и рублях считаются автоматически по курсу
+    (можно вручную задать 4-м и 5-м значением)."""
+    if not message.text:
+        bot.reply_to(message, "❌ Отправьте текстом.")
+        return
+
+    added, errors = [], []
+    for line in message.text.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 2:
+                raise ValueError("нет цены")
+
+            name = parts[0]
+            if len(parts) == 2:
+                category = "🔥 Разное"
+                p_uah = float(parts[1].replace(" ", ""))
+                extra = []
+            else:
+                category = parts[1] or "🔥 Разное"
+                p_uah = float(parts[2].replace(" ", ""))
+                extra = parts[3:]
+
+            # автоконвертация по курсу: 1 ⭐ = 0,83 грн = 1,65 ₽
+            p_stars = float(extra[0]) if len(extra) > 0 else convert_currency(p_uah, "UAH", "STARS")
+            p_rub = float(extra[1]) if len(extra) > 1 else convert_currency(p_uah, "UAH", "RUB")
+
+            cursor.execute(
+                "INSERT INTO catalog_items (name, category, price_uah, price_stars, price_rub) VALUES (?, ?, ?, ?, ?)",
+                (name, category, p_uah, p_stars, p_rub)
+            )
+            conn.commit()
+            added.append(f"• **{name}** ({category}) — {p_uah:g} грн | {p_stars:g} ⭐ | {p_rub:g} ₽")
+        except Exception as e:
+            print(f"Ошибка добавления товара '{line}': {e}")
+            errors.append(f"• `{line}`")
+
+    text = ""
+    if added:
+        text += f"✅ **Добавлено товаров: {len(added)}**\n\n" + "\n".join(added)
+    if errors:
+        text += ("\n\n" if text else "") + "❌ **Не удалось добавить (проверьте формат):**\n" + "\n".join(errors)
+    bot.reply_to(message, text or "❌ Пустое сообщение.", parse_mode="Markdown")
 
 def process_promo_activation(message):
     user_id = message.from_user.id
