@@ -6,6 +6,8 @@ from telebot.apihelper import ApiTelegramException
 import time
 import random
 import threading
+import csv
+import io
 from flask import Flask
 
 # ==================== FLASK KEEP-ALIVE SERVER ====================
@@ -35,7 +37,7 @@ REQUIRED_CHANNEL = "@nazarowshop"
 # --- TON ---
 TON_WALLET = os.environ.get("TON_WALLET", "UQC1PIFE4zI6qZmOxn72gCyQWWSq1Uax4kgeOGnTdICT-cC-")
 # Курс: сколько грн стоит 1 TON. ОБЯЗАТЕЛЬНО поставьте актуальный (можно через переменную TON_RATE_UAH)
-TON_RATE_UAH = float(os.environ.get("TON_RATE_UAH", "65"))
+TON_RATE_UAH = float(os.environ.get("TON_RATE_UAH", "55"))
 
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "4400005572759295")
 CARD_HOLDER = "А-Банк / Карта UAH"
@@ -122,6 +124,28 @@ cursor.execute("""
         file_id TEXT
     )
 """)
+conn.commit()
+
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS referral_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        referrer_id INTEGER,
+        invited_id INTEGER,
+        created_at INTEGER
+    )
+""")
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS competition (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        active INTEGER DEFAULT 0,
+        start_at INTEGER DEFAULT 0,
+        end_at INTEGER DEFAULT 0,
+        prize1 TEXT DEFAULT '100 грн на баланс',
+        prize2 TEXT DEFAULT '50 грн на баланс',
+        prize3 TEXT DEFAULT '25 грн на баланс'
+    )
+""")
+cursor.execute("INSERT OR IGNORE INTO competition (id) VALUES (1)")
 conn.commit()
 
 # Проверка/миграция недостающих колонок
@@ -232,12 +256,48 @@ def get_admin_markup():
     b5 = types.InlineKeyboardButton("💰 Выдать баланс", callback_data="admin_give_info")
     b6 = types.InlineKeyboardButton("🎁 Промокоды", callback_data="admin_promo_info")
     b7 = types.InlineKeyboardButton("🖼 Баннеры меню", callback_data="admin_banners")
+    b8 = types.InlineKeyboardButton("🏆 Инвайт-топ", callback_data="admin_contest")
+    b9 = types.InlineKeyboardButton("🔎 Поиск юзера", callback_data="admin_search_user")
+    b10 = types.InlineKeyboardButton("📤 Экспорт заказов", callback_data="admin_export_orders")
     markup.add(b1)
     markup.add(b2, b3)
     markup.add(b4)
     markup.add(b5, b6)
     markup.add(b7)
+    markup.add(b8)
+    markup.add(b9, b10)
     return markup
+
+def get_competition():
+    cursor.execute("SELECT active, start_at, end_at, prize1, prize2, prize3 FROM competition WHERE id=1")
+    row = cursor.fetchone()
+    return {
+        "active": bool(row[0]), "start_at": row[1], "end_at": row[2],
+        "prize1": row[3], "prize2": row[4], "prize3": row[5]
+    }
+
+def get_leaderboard(limit=10):
+    comp = get_competition()
+    if comp["active"]:
+        cursor.execute(
+            "SELECT referrer_id, COUNT(*) as cnt FROM referral_events WHERE created_at BETWEEN ? AND ? GROUP BY referrer_id ORDER BY cnt DESC LIMIT ?",
+            (comp["start_at"], comp["end_at"], limit)
+        )
+    else:
+        cursor.execute(
+            "SELECT referrer_id, COUNT(*) as cnt FROM referral_events GROUP BY referrer_id ORDER BY cnt DESC LIMIT ?",
+            (limit,)
+        )
+    return cursor.fetchall()
+
+def get_display_name(uid):
+    try:
+        chat = bot.get_chat(uid)
+        if chat.username:
+            return f"@{chat.username}"
+        return chat.first_name or f"ID {uid}"
+    except Exception:
+        return f"ID {uid}"
 
 ADMIN_PANEL_TEXT = "🛠 **Панель Администратора**\n\nУправляйте магазином с помощью кнопок ниже:"
 
@@ -402,6 +462,7 @@ def start(message):
                 rew_val, rew_sym = REF_REWARDS.get(ref_curr, (3.0, "грн"))
                 
                 cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (rew_val, referred_by))
+                cursor.execute("INSERT INTO referral_events (referrer_id, invited_id, created_at) VALUES (?, ?, ?)", (referred_by, user_id, int(time.time())))
                 conn.commit()
                 
                 try:
@@ -805,8 +866,9 @@ def callback(call):
         b_stars = types.InlineKeyboardButton("⭐ STARS (Telegram Подарок)", callback_data="topup_method_stars")
         b_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
         b_ton = types.InlineKeyboardButton("💎 TON (Кошелёк)", callback_data="topup_method_ton")
+        b_rub = types.InlineKeyboardButton("🇷🇺 Рубли (RUB)", callback_data="topup_method_rub")
         markup.add(b_uah, b_stars)
-        markup.add(b_ton)
+        markup.add(b_ton, b_rub)
         markup.add(b_back)
 
         show_menu(call.message, "topup", "💳 **Выберите способ пополнения баланса:**", markup)
@@ -913,6 +975,90 @@ def callback(call):
         edit_text(f"✅ TON-платёж подтверждён! Пользователю {p_uid} зачислено +{final_amount:.2f} {sym}.", call.message.chat.id, call.message.message_id)
         try:
             bot.send_message(p_uid, f"🎉 **Платёж TON подтверждён!**\n\n💰 На ваш баланс зачислено: **+{final_amount:.2f} {sym}**", parse_mode="Markdown")
+        except Exception: pass
+
+    elif call.data == "topup_method_rub":
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        msg = bot.send_message(
+            call.message.chat.id,
+            "🇷🇺 **Пополнение баланса рублями (RUB)**\n\n"
+            f"Курс: 2 ₽ = 1 ⭐\n\n"
+            "Введите сумму в **рублях**, на которую хотите пополнить (например: `500`):",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, process_topup_rub_amount)
+
+    elif call.data.startswith("paidrub_"):
+        payment_id = call.data.split("_", 1)[1]
+        cursor.execute("SELECT amount, status FROM payments WHERE payment_id=?", (payment_id,))
+        p_row = cursor.fetchone()
+
+        if not p_row:
+            bot.send_message(call.message.chat.id, "❌ Заявка не найдена!")
+            return
+
+        p_amount, p_status = p_row
+
+        if p_status == "completed":
+            bot.send_message(call.message.chat.id, "✅ Этот платёж уже был зачислен!")
+            return
+
+        edit_text(
+            f"⏳ **Заявка на проверку RUB-перевода отправлена!**\n\n"
+            f"🇷🇺 Сумма: **{p_amount:g} ₽**\n"
+            f"🆔 ID заявки: `{payment_id}`\n\n"
+            "Администратор проверит поступление и зачислит баланс.",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+
+        username = f"@{call.from_user.username}" if call.from_user.username else "без username"
+        adm_markup = types.InlineKeyboardMarkup()
+        btn_confirm = types.InlineKeyboardButton("✅ Подтвердить (Начислить)", callback_data=f"admconfirmrub_{payment_id}")
+        btn_reject = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admreject_{payment_id}")
+        adm_markup.add(btn_confirm, btn_reject)
+
+        adm_text = (
+            f"🇷🇺 **ЗАЯВКА НА ПОПОЛНЕНИЕ RUB!**\n\n"
+            f"👤 Покупатель: {call.from_user.first_name} ({username})\n"
+            f"🆔 ID пользователя: `{user_id}`\n"
+            f"🇷🇺 Ожидаемая сумма: **{p_amount:g} ₽**\n"
+            f"🧾 ID заявки: `{payment_id}`\n\n"
+            f"📌 Проверьте поступление на карту и нажмите кнопку ниже:"
+        )
+        try:
+            bot.send_message(ADMIN_ID, adm_text, parse_mode="Markdown", reply_markup=adm_markup)
+        except Exception as e:
+            print(f"Ошибка отправки админу: {e}")
+
+    elif call.data.startswith("admconfirmrub_"):
+        if user_id != ADMIN_ID: return
+        payment_id = call.data.split("_", 1)[1]
+
+        cursor.execute("SELECT user_id, amount, status FROM payments WHERE payment_id=?", (payment_id,))
+        p_row = cursor.fetchone()
+        if not p_row: return
+
+        p_uid, p_amount, p_status = p_row
+        if p_status == "completed":
+            bot.answer_callback_query(call.id, "⚠️ Эта заявка уже обработана!", show_alert=True)
+            return
+
+        cursor.execute("SELECT currency FROM users WHERE user_id=?", (p_uid,))
+        u_curr_row = cursor.fetchone()
+        u_curr = u_curr_row[0] if u_curr_row else "UAH"
+
+        final_amount = convert_currency(p_amount, "RUB", u_curr)
+
+        cursor.execute("UPDATE payments SET status='completed' WHERE payment_id=?", (payment_id,))
+        cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (final_amount, p_uid))
+        conn.commit()
+
+        sym = CURRENCY_SYMBOLS.get(u_curr, "")
+        edit_text(f"✅ RUB-платёж подтверждён! Пользователю {p_uid} зачислено +{final_amount:.2f} {sym}.", call.message.chat.id, call.message.message_id)
+        try:
+            bot.send_message(p_uid, f"🎉 **Платёж рублями подтверждён!**\n\n💰 На ваш баланс зачислено: **+{final_amount:.2f} {sym}**", parse_mode="Markdown")
         except Exception: pass
 
     elif call.data.startswith("paid_"):
@@ -1129,9 +1275,42 @@ def callback(call):
             f"📊 Приглашено друзей: **{ref_count}**\n\n"
             f"🔗 **Ваша реферальная ссылка:**\n`{ref_link}`"
         )
+
+        comp = get_competition()
+        if comp["active"]:
+            days_left = max(0, int((comp["end_at"] - time.time()) // 86400))
+            hours_left = max(0, int(((comp["end_at"] - time.time()) % 86400) // 3600))
+            board = get_leaderboard(1000)
+            place = next((i + 1 for i, r in enumerate(board) if r[0] == user_id), None)
+            my_cnt = next((r[1] for r in board if r[0] == user_id), 0)
+            place_str = f"#{place}" if place else "вне топа"
+            text += (
+                f"\n\n🏆 **Идёт конкурс на самых активных приглашающих!**\n"
+                f"🥇 {comp['prize1']}\n🥈 {comp['prize2']}\n🥉 {comp['prize3']}\n\n"
+                f"⏳ Осталось: **{days_left}д {hours_left}ч**\n"
+                f"📍 Ваше место: **{place_str}** ({my_cnt} реф. за конкурс)"
+            )
+
         markup = types.InlineKeyboardMarkup()
+        if comp["active"]:
+            markup.add(types.InlineKeyboardButton("🏆 Топ участников", callback_data="contest_top_user"))
         markup.add(types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile"))
         show_menu(call.message, "ref", text, markup)
+
+    elif call.data == "contest_top_user":
+        board = get_leaderboard(10)
+        if not board:
+            text = "🏆 **Топ участников конкурса**\n\nПока никто не пригласил друзей."
+        else:
+            medals = ["🥇", "🥈", "🥉"]
+            lines = []
+            for i, (uid, cnt) in enumerate(board):
+                mark = medals[i] if i < 3 else f"{i+1}."
+                lines.append(f"{mark} {get_display_name(uid)} — {cnt} реф.")
+            text = "🏆 **Топ участников конкурса**\n\n" + "\n".join(lines)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="ref_system"))
+        bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
 
     elif call.data == "my_orders":
         cursor.execute("SELECT order_id, item_name, price, currency, status FROM orders WHERE user_id=? ORDER BY order_id DESC LIMIT 10", (user_id,))
@@ -1219,6 +1398,136 @@ def callback(call):
     elif call.data == "admin_promo_info":
         if user_id != ADMIN_ID: return
         bot.send_message(call.message.chat.id, "🎁 Чтобы создать промокод, отправьте команду:\n`/add_promo КОД СУММА КОЛИЧЕСТВО`\n\n*Пример:* `/add_promo BONUS50 50 10`", parse_mode="Markdown")
+
+    elif call.data == "admin_contest":
+        if user_id != ADMIN_ID: return
+        comp = get_competition()
+        markup = types.InlineKeyboardMarkup()
+        if comp["active"]:
+            days_left = max(0, int((comp["end_at"] - time.time()) // 86400))
+            status = f"🟢 Активен, осталось {days_left} дн."
+            markup.add(types.InlineKeyboardButton("⏹ Остановить", callback_data="contest_stop"))
+            markup.add(types.InlineKeyboardButton("🏁 Завершить и наградить", callback_data="contest_finish"))
+        else:
+            status = "🔴 Не запущен"
+            markup.add(types.InlineKeyboardButton("▶️ 3 дня", callback_data="contest_start_3"),
+                       types.InlineKeyboardButton("▶️ 7 дней", callback_data="contest_start_7"))
+            markup.add(types.InlineKeyboardButton("▶️ 14 дней", callback_data="contest_start_14"),
+                       types.InlineKeyboardButton("▶️ 30 дней", callback_data="contest_start_30"))
+        markup.add(types.InlineKeyboardButton("🎁 Изменить призы", callback_data="contest_set_prizes"))
+        markup.add(types.InlineKeyboardButton("📊 Топ сейчас", callback_data="contest_top_admin"))
+        markup.add(types.InlineKeyboardButton("⬅️ Админ-панель", callback_data="admin_home"))
+
+        text = (
+            f"🏆 **Инвайт-соревнование**\n\n"
+            f"Статус: {status}\n\n"
+            f"🥇 {comp['prize1']}\n🥈 {comp['prize2']}\n🥉 {comp['prize3']}\n\n"
+            f"Побеждают те, кто пригласил больше всего новых пользователей за время конкурса."
+        )
+        edit_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data.startswith("contest_start_"):
+        if user_id != ADMIN_ID: return
+        days = int(call.data.split("_")[-1])
+        now = int(time.time())
+        cursor.execute("UPDATE competition SET active=1, start_at=?, end_at=? WHERE id=1", (now, now + days * 86400))
+        conn.commit()
+        bot.answer_callback_query(call.id, f"✅ Конкурс запущен на {days} дн.!", show_alert=True)
+        comp = get_competition()
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⏹ Остановить", callback_data="contest_stop"))
+        markup.add(types.InlineKeyboardButton("🏁 Завершить и наградить", callback_data="contest_finish"))
+        markup.add(types.InlineKeyboardButton("🎁 Изменить призы", callback_data="contest_set_prizes"))
+        markup.add(types.InlineKeyboardButton("📊 Топ сейчас", callback_data="contest_top_admin"))
+        markup.add(types.InlineKeyboardButton("⬅️ Админ-панель", callback_data="admin_home"))
+        text = (
+            f"🏆 **Инвайт-соревнование**\n\nСтатус: 🟢 Активен, {days} дн.\n\n"
+            f"🥇 {comp['prize1']}\n🥈 {comp['prize2']}\n🥉 {comp['prize3']}"
+        )
+        edit_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+
+    elif call.data == "contest_stop":
+        if user_id != ADMIN_ID: return
+        cursor.execute("UPDATE competition SET active=0 WHERE id=1")
+        conn.commit()
+        bot.answer_callback_query(call.id, "⏹ Конкурс остановлен.", show_alert=True)
+
+    elif call.data == "contest_set_prizes":
+        if user_id != ADMIN_ID: return
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        msg = bot.send_message(
+            call.message.chat.id,
+            "🎁 Отправьте 3 приза, каждый с новой строки (1 место, 2 место, 3 место).\n\n"
+            "*Пример:*\n100 грн на баланс\n50 грн на баланс\n25 грн на баланс",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, process_contest_prizes)
+
+    elif call.data == "contest_top_admin":
+        if user_id != ADMIN_ID: return
+        board = get_leaderboard(10)
+        if not board:
+            text = "🏆 **Топ участников**\n\nПока никто не пригласил друзей."
+        else:
+            medals = ["🥇", "🥈", "🥉"]
+            lines = []
+            for i, (uid, cnt) in enumerate(board):
+                mark = medals[i] if i < 3 else f"{i+1}."
+                lines.append(f"{mark} {get_display_name(uid)} (`{uid}`) — {cnt} реф.")
+            text = "🏆 **Топ участников**\n\n" + "\n".join(lines)
+        bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
+
+    elif call.data == "contest_finish":
+        if user_id != ADMIN_ID: return
+        comp = get_competition()
+        board = get_leaderboard(3)
+        cursor.execute("UPDATE competition SET active=0 WHERE id=1")
+        conn.commit()
+
+        if not board:
+            bot.send_message(call.message.chat.id, "🏁 Конкурс завершён. Участников не было.")
+            return
+
+        prizes = [comp["prize1"], comp["prize2"], comp["prize3"]]
+        medals = ["🥇", "🥈", "🥉"]
+        summary_lines = []
+        for i, (uid, cnt) in enumerate(board):
+            prize = prizes[i] if i < len(prizes) else "приз"
+            summary_lines.append(f"{medals[i]} {get_display_name(uid)} (`{uid}`) — {cnt} реф. → {prize}")
+            try:
+                bot.send_message(
+                    uid,
+                    f"🏆 **Конкурс завершён!**\n\n"
+                    f"Вы заняли **{i+1} место** ({cnt} приглашённых друзей)!\n"
+                    f"🎁 Ваш приз: **{prize}**\n\n"
+                    f"Администратор свяжется с вами для вручения приза.",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"Не удалось уведомить победителя {uid}: {e}")
+
+        bot.send_message(call.message.chat.id, "🏁 **Конкурс завершён! Результаты:**\n\n" + "\n".join(summary_lines), parse_mode="Markdown")
+
+    elif call.data == "admin_search_user":
+        if user_id != ADMIN_ID: return
+        bot.clear_step_handler_by_chat_id(chat_id=call.message.chat.id)
+        msg = bot.send_message(call.message.chat.id, "🔎 Отправьте ID пользователя для поиска:")
+        bot.register_next_step_handler(msg, process_search_user)
+
+    elif call.data == "admin_export_orders":
+        if user_id != ADMIN_ID: return
+        cursor.execute("SELECT order_id, user_id, item_name, price, currency, status FROM orders ORDER BY order_id DESC")
+        rows = cursor.fetchall()
+        if not rows:
+            bot.send_message(call.message.chat.id, "📤 Заказов пока нет.")
+            return
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["order_id", "user_id", "item_name", "price", "currency", "status"])
+        writer.writerows(rows)
+        data = io.BytesIO(buf.getvalue().encode("utf-8-sig"))
+        data.name = f"orders_{int(time.time())}.csv"
+        bot.send_document(call.message.chat.id, data, caption=f"📤 Экспорт заказов: {len(rows)} шт.")
 
 # ==================== STEP HANDLERS (ОБРАБОТКА ВВОДА) ====================
 def process_topup_amount(message):
@@ -1357,6 +1666,105 @@ def process_banner_upload(message, menu_key):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("🖼 К баннерам", callback_data="admin_banners"))
     bot.reply_to(message, f"✅ Баннер для «{BANNER_MENUS.get(menu_key, menu_key)}» сохранён!", reply_markup=markup)
+
+def process_topup_rub_amount(message):
+    if message.text and message.text.startswith('/'):
+        return
+
+    try:
+        amount = float(message.text.replace(",", ".").strip())
+        if amount <= 0:
+            msg = bot.reply_to(message, "❌ Сумма должна быть больше 0 ₽.\nВведите сумму ещё раз:")
+            bot.register_next_step_handler(msg, process_topup_rub_amount)
+            return
+
+        amount = round(amount, 2)
+        user_id = message.from_user.id
+        payment_id = f"payrub_{user_id}_{int(time.time())}"
+
+        cursor.execute("INSERT INTO payments (payment_id, user_id, amount) VALUES (?, ?, ?)", (payment_id, user_id, amount))
+        conn.commit()
+
+        markup = types.InlineKeyboardMarkup()
+        btn_manager = types.InlineKeyboardButton("💬 Написать менеджеру", url=f"https://t.me/{MANAGER_USERNAME}")
+        btn_paid = types.InlineKeyboardButton("✅ Я оплатил", callback_data=f"paidrub_{payment_id}")
+        btn_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
+        markup.add(btn_manager)
+        markup.add(btn_paid)
+        markup.add(btn_back)
+
+        text = (
+            f"🇷🇺 **Пополнение баланса рублями**\n\n"
+            f"💰 Сумма к оплате: **{amount:g} ₽**\n\n"
+            f"📌 **Инструкция:**\n"
+            f"1. Напишите менеджеру @{MANAGER_USERNAME} — он пришлёт номер карты для перевода.\n"
+            f"2. Переведите ровно **{amount:g} ₽** и укажите менеджеру ID заявки:\n"
+            f"`{payment_id}`\n\n"
+            f"3. После перевода нажмите кнопку **«✅ Я оплатил»** ниже.\n\n"
+            f"⚠️ Без ID заявки платёж могут не засчитать."
+        )
+        bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
+
+    except (ValueError, AttributeError):
+        msg = bot.reply_to(message, "❌ **Ошибка ввода!** Введите число (например: `500`):", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_topup_rub_amount)
+
+def process_contest_prizes(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if message.text and message.text.startswith('/'):
+        bot.reply_to(message, "❌ Изменение призов отменено.")
+        return
+    lines = [l.strip() for l in message.text.split("\n") if l.strip()]
+    if len(lines) < 3:
+        msg = bot.reply_to(message, "❌ Нужно 3 строки (1, 2 и 3 место). Отправьте ещё раз или /cancel:")
+        bot.register_next_step_handler(msg, process_contest_prizes)
+        return
+    cursor.execute("UPDATE competition SET prize1=?, prize2=?, prize3=? WHERE id=1", (lines[0], lines[1], lines[2]))
+    conn.commit()
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🏆 К конкурсу", callback_data="admin_contest"))
+    bot.reply_to(message, f"✅ Призы обновлены:\n🥇 {lines[0]}\n🥈 {lines[1]}\n🥉 {lines[2]}", reply_markup=markup)
+
+def process_search_user(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if message.text and message.text.startswith('/'):
+        bot.reply_to(message, "❌ Поиск отменён.")
+        return
+    if not message.text or not message.text.strip().isdigit():
+        msg = bot.reply_to(message, "❌ ID должен быть числом. Отправьте ещё раз или /cancel:")
+        bot.register_next_step_handler(msg, process_search_user)
+        return
+
+    uid = int(message.text.strip())
+    cursor.execute("SELECT balance, currency, referred_by, last_bonus FROM users WHERE user_id=?", (uid,))
+    row = cursor.fetchone()
+    if not row:
+        bot.reply_to(message, f"❌ Пользователь с ID `{uid}` не найден в базе.", parse_mode="Markdown")
+        return
+
+    balance, currency, referred_by, last_bonus = row
+    sym = CURRENCY_SYMBOLS.get(currency, "")
+    cursor.execute("SELECT COUNT(*) FROM orders WHERE user_id=?", (uid,))
+    orders_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM orders WHERE user_id=? AND status='completed'", (uid,))
+    completed_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (uid,))
+    ref_count = cursor.fetchone()[0]
+
+    name = get_display_name(uid)
+    text = (
+        f"🔎 **Пользователь {name}**\n\n"
+        f"🆔 ID: `{uid}`\n"
+        f"💰 Баланс: **{balance:.2f} {sym}**\n"
+        f"📦 Заказов всего / выполнено: **{orders_count} / {completed_count}**\n"
+        f"👥 Приглашено рефералов: **{ref_count}**\n"
+        f"🔗 Пригласил его: {referred_by if referred_by else '—'}"
+    )
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔎 Искать ещё", callback_data="admin_search_user"))
+    bot.reply_to(message, text, parse_mode="Markdown", reply_markup=markup)
 
 def process_review_text(message, order_id, rating):
     text = message.text if message.text else "Без текстового отзыва"
