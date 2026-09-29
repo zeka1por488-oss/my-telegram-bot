@@ -38,6 +38,10 @@ REQUIRED_CHANNEL = "@nazarowshop"
 TON_WALLET = os.environ.get("TON_WALLET", "UQC1PIFE4zI6qZmOxn72gCyQWWSq1Uax4kgeOGnTdICT-cC-")
 # Курс: сколько грн стоит 1 TON. ОБЯЗАТЕЛЬНО поставьте актуальный (можно через переменную TON_RATE_UAH)
 TON_RATE_UAH = float(os.environ.get("TON_RATE_UAH", "65"))
+TON_RATE_RUB = float(os.environ.get("TON_RATE_RUB", "122"))
+# Курс звезды
+STAR_RATE_UAH = 0.83
+STAR_RATE_RUB = 1.65
 
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "4400005572759295")
 CARD_HOLDER = "А-Банк / Карта UAH"
@@ -151,6 +155,14 @@ conn.commit()
 # Проверка/миграция недостающих колонок
 try:
     cursor.execute("ALTER TABLE users ADD COLUMN last_bonus INTEGER DEFAULT 0")
+    conn.commit()
+except Exception:
+    pass
+
+try:
+    cursor.execute("ALTER TABLE users ADD COLUMN curr_set INTEGER DEFAULT 0")
+    # все уже существующие пользователи считаются выбравшими валюту
+    cursor.execute("UPDATE users SET curr_set=1")
     conn.commit()
 except Exception:
     pass
@@ -326,25 +338,67 @@ def get_sub_keyboard():
 
 def convert_currency(amount, from_curr, to_curr):
     """
-    Универсальная конвертация на основе курса:
-    1 STARS = 0.75 UAH = 2.0 RUB
+    Курсы:
+    1 TON = TON_RATE_UAH грн = TON_RATE_RUB руб
+    1 STAR = 0.83 грн = 1.65 руб
     """
-    amount_in_stars = amount
+    if from_curr == to_curr:
+        return amount
+
+    # переводим в "внутреннюю" единицу — гривны/рубли/звёзды напрямую
     if from_curr == "TON":
-        amount_in_stars = amount * TON_RATE_UAH / 0.75
+        if to_curr == "UAH":
+            return round(amount * TON_RATE_UAH, 2)
+        if to_curr == "RUB":
+            return round(amount * TON_RATE_RUB, 2)
+        if to_curr == "STARS":
+            return round(amount * TON_RATE_UAH / STAR_RATE_UAH, 1)
+        return amount
+
+    if from_curr == "STARS":
+        stars = amount
     elif from_curr == "UAH":
-        amount_in_stars = amount / 0.83
+        stars = amount / STAR_RATE_UAH
     elif from_curr == "RUB":
-        amount_in_stars = amount / 1.65
-        
+        stars = amount / STAR_RATE_RUB
+    else:
+        return amount
+
     if to_curr == "STARS":
-        return round(amount_in_stars, 1)
-    elif to_curr == "UAH":
-        return round(amount_in_stars * 0.75, 2)
-    elif to_curr == "RUB":
-        return round(amount_in_stars * 1.65, 2)
-    
+        return round(stars, 1)
+    if to_curr == "UAH":
+        return round(stars * STAR_RATE_UAH, 2)
+    if to_curr == "RUB":
+        return round(stars * STAR_RATE_RUB, 2)
     return amount
+
+def get_rates_text():
+    return (
+        "📊 **Курс:**\n"
+        f"💎 1 TON = **{TON_RATE_UAH:g} грн** = **{TON_RATE_RUB:g} ₽**\n"
+        f"⭐ 1 звезда = **{str(STAR_RATE_UAH).replace('.', ',')} грн** = **{str(STAR_RATE_RUB).replace('.', ',')} ₽**"
+    )
+
+def get_currency_markup(back_to_profile=False):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🇺🇦 UAH (грн)", callback_data="set_curr_UAH"))
+    markup.add(types.InlineKeyboardButton("⭐ Stars (звёзды)", callback_data="set_curr_STARS"))
+    markup.add(types.InlineKeyboardButton("🇷🇺 RUB (₽)", callback_data="set_curr_RUB"))
+    if back_to_profile:
+        markup.add(types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile"))
+    return markup
+
+def get_currency_text(first_time=False):
+    head = "🌐 **Выберите удобную валюту**\n\n"
+    if first_time:
+        head = ("✅ **Подписка подтверждена!**\n\n"
+                "Остался последний шаг — выберите удобную валюту, в которой вы будете пользоваться ботом:\n\n")
+    return head + get_rates_text()
+
+def is_currency_set(user_id):
+    cursor.execute("SELECT curr_set FROM users WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
+    return bool(row and row[0])
 
 def get_main_menu_text(first_name):
     return (
@@ -475,6 +529,10 @@ def start(message):
                 except Exception as e:
                     print(f"Ошибка отправки рефереру: {e}")
 
+    if not is_currency_set(user_id):
+        show_menu(None, "currency", get_currency_text(first_time=True), get_currency_markup(), chat_id=message.chat.id)
+        return
+
     text = get_main_menu_text(message.from_user.first_name)
     markup = get_main_menu_keyboard()
     show_menu(None, "main", text, markup, chat_id=message.chat.id)
@@ -523,21 +581,36 @@ def give_balance(message):
 # ==================== CALLBACK HANDLER ====================
 @bot.callback_query_handler(func=lambda call: True)
 def callback(call):
-    bot.answer_callback_query(call.id)
     user_id = call.from_user.id
-    
+
+    # Telegram позволяет ответить на callback ТОЛЬКО ОДИН РАЗ.
+    # Для кнопок, где ниже показывается alert, заранее не отвечаем.
+    if not (call.data == "check_subscription" or call.data.startswith("set_curr_")):
+        bot.answer_callback_query(call.id)
+
+    def safe_answer(text=None, alert=False):
+        try:
+            bot.answer_callback_query(call.id, text, show_alert=alert)
+        except Exception:
+            pass
+
     if call.data == "check_subscription":
         if check_subscription(user_id):
-            bot.answer_callback_query(call.id, "✅ Подписка подтверждена!", show_alert=False)
-            text = get_main_menu_text(call.from_user.first_name)
-            markup = get_main_menu_keyboard()
-            show_menu(call.message, "main", text, markup)
+            safe_answer("✅ Подписка подтверждена!")
+            cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+            conn.commit()
+            if not is_currency_set(user_id):
+                show_menu(call.message, "currency", get_currency_text(first_time=True), get_currency_markup())
+            else:
+                text = get_main_menu_text(call.from_user.first_name)
+                markup = get_main_menu_keyboard()
+                show_menu(call.message, "main", text, markup)
         else:
-            bot.answer_callback_query(call.id, "❌ Вы всё ещё не подписаны на канал!", show_alert=True)
+            safe_answer("❌ Вы всё ещё не подписаны на канал!", True)
         return
 
     if not check_subscription(user_id):
-        bot.answer_callback_query(call.id, "⚠️ Доступ ограничен! Подпишитесь на канал.", show_alert=True)
+        safe_answer("⚠️ Доступ ограничен! Подпишитесь на канал.", True)
         text = (
             f"⚠️ **Для продолжения работы подпишитесь на наш канал:**\n"
             f"👉 {REQUIRED_CHANNEL}"
@@ -555,6 +628,15 @@ def callback(call):
         balance, curr, last_bonus = u_row[0], u_row[1], u_row[2]
 
     sym = CURRENCY_SYMBOLS.get(curr, "грн")
+
+    # Пока валюта не выбрана — доступен только выбор валюты (админ не блокируется)
+    if user_id != ADMIN_ID and not call.data.startswith("set_curr_") and not is_currency_set(user_id):
+        safe_answer()
+        show_menu(call.message, "currency", get_currency_text(first_time=True), get_currency_markup())
+        return
+
+    if call.data.startswith("set_curr_"):
+        pass  # ответ даётся в самом обработчике ниже
 
     if call.data == "admin_add_item":
         if user_id != ADMIN_ID:
@@ -898,7 +980,7 @@ def callback(call):
         msg = bot.send_message(
             call.message.chat.id,
             "💎 **Пополнение баланса через TON**\n\n"
-            f"Курс: 1 TON ≈ {TON_RATE_UAH:g} грн\n\n"
+            f"Курс: 1 TON = {TON_RATE_UAH:g} грн = {TON_RATE_RUB:g} ₽\n\n"
             "Введите количество **TON**, на которое хотите пополнить (например: `1` или `2.5`):",
             parse_mode="Markdown"
         )
@@ -1224,40 +1306,43 @@ def callback(call):
         except Exception: pass
 
     elif call.data == "change_currency":
-        markup = types.InlineKeyboardMarkup()
-        b1 = types.InlineKeyboardButton("🇺🇦 UAH (грн)", callback_data="set_curr_UAH")
-        b2 = types.InlineKeyboardButton("⭐ Stars (звёзды)", callback_data="set_curr_STARS")
-        b3 = types.InlineKeyboardButton("🇷🇺 RUB (₽)", callback_data="set_curr_RUB")
-        b_back = types.InlineKeyboardButton("⬅️ В профиль", callback_data="profile")
-        markup.add(b1, b2, b3)
-        markup.add(b_back)
-        show_menu(call.message, "currency", "🌐 **Выберите удобную валюту:**", markup)
+        show_menu(call.message, "currency", get_currency_text(), get_currency_markup(back_to_profile=True))
 
     elif call.data.startswith("set_curr_"):
-        new_curr = call.data.split("_")[2]
-        
-        cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-        current_bal = cursor.fetchone()[0]
-        
-        if current_bal > 0:
-            bot.answer_callback_query(call.id, "❌ Сменить валюту можно только при нулевом балансе! Потратьте средства.", show_alert=True)
+        new_curr = call.data[len("set_curr_"):]
+        if new_curr not in CURRENCY_SYMBOLS:
+            safe_answer("❌ Неизвестная валюта", True)
             return
 
-        cursor.execute("UPDATE users SET currency=? WHERE user_id=?", (new_curr, user_id))
-        conn.commit()
-        
+        first_time = not is_currency_set(user_id)
+
         cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-        new_bal = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        current_bal = row[0] if row and row[0] is not None else 0.0
+
+        # менять валюту при ненулевом балансе нельзя (кроме первого выбора)
+        if current_bal > 0 and not first_time:
+            safe_answer("❌ Сменить валюту можно только при нулевом балансе! Потратьте средства.", True)
+            return
+
+        cursor.execute("UPDATE users SET currency=?, curr_set=1 WHERE user_id=?", (new_curr, user_id))
+        conn.commit()
+        safe_answer(f"✅ Валюта: {new_curr}")
+
+        if first_time:
+            text = get_main_menu_text(call.from_user.first_name)
+            show_menu(call.message, "main", text, get_main_menu_keyboard())
+            return
+
         new_sym = CURRENCY_SYMBOLS.get(new_curr, "грн")
-        
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("💳 Пополнить баланс", callback_data="top_up_balance"))
         markup.add(types.InlineKeyboardButton("👥 Реферальная система", callback_data="ref_system"))
         markup.add(types.InlineKeyboardButton(f"🌐 Валюта: {new_curr}", callback_data="change_currency"), types.InlineKeyboardButton("📜 Мои заказы", callback_data="my_orders"))
         markup.add(types.InlineKeyboardButton("🎁 Активировать промокод", callback_data="use_promo"))
         markup.add(types.InlineKeyboardButton("⬅️ Главное меню", callback_data="main_menu"))
-        
-        text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{new_bal:.2f} {new_sym}**\n🌐 Выбранная валюта: **{new_curr}**"
+
+        text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{current_bal:.2f} {new_sym}**\n🌐 Выбранная валюта: **{new_curr}**"
         show_menu(call.message, "profile", text, markup)
 
     elif call.data == "ref_system":
