@@ -437,7 +437,7 @@ def save_review(order_id, user_id, rating, text, first_name, username):
         u_curr_row = cursor.fetchone()
         u_curr = u_curr_row[0] if u_curr_row else "UAH"
         
-        bonus_val = 10.0 if u_curr == "UAH" else (15.0 if u_curr == "STARS" else 25.0)
+        bonus_val = 2.5 if u_curr == "UAH" else (2.0 if u_curr == "STARS" else 5.0)
         sym = CURRENCY_SYMBOLS.get(u_curr, "грн")
 
         cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (bonus_val, user_id))
@@ -941,7 +941,7 @@ def callback(call):
         text = f"👤 **Профиль**\n\n🆔 Ваш ID: `{user_id}`\n💰 Баланс: **{balance:.2f} {sym}**\n🌐 Выбранная валюта: **{curr}**"
         show_menu(call.message, "profile", text, markup)
 
-    # ==================== ВЫБОР МЕТОДА ПОПОЛНЕНИЯ БАЛАНСА (ТОЧНО КАК В MAIN 3) ====================
+    # ==================== ВЫБОР МЕТОДА ПОПОЛНЕНИЯ БАЛАНСА ====================
     elif call.data == "top_up_balance":
         markup = types.InlineKeyboardMarkup()
         b_uah = types.InlineKeyboardButton("💳 UAH (Карта)", callback_data="topup_method_uah")
@@ -1316,16 +1316,18 @@ def callback(call):
 
         first_time = not is_currency_set(user_id)
 
-        cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
+        cursor.execute("SELECT balance, currency FROM users WHERE user_id=?", (user_id,))
         row = cursor.fetchone()
-        current_bal = row[0] if row and row[0] is not None else 0.0
+        old_bal = row[0] if row and row[0] is not None else 0.0
+        old_curr = row[1] if row and row[1] else "UAH"
 
-        # менять валюту при ненулевом балансе нельзя (кроме первого выбора)
-        if current_bal > 0 and not first_time:
-            safe_answer("❌ Сменить валюту можно только при нулевом балансе! Потратьте средства.", True)
-            return
+        # Баланс автоматически переводится в выбранную валюту по курсу
+        if old_curr != new_curr and old_bal > 0:
+            current_bal = convert_currency(old_bal, old_curr, new_curr)
+        else:
+            current_bal = old_bal
 
-        cursor.execute("UPDATE users SET currency=?, curr_set=1 WHERE user_id=?", (new_curr, user_id))
+        cursor.execute("UPDATE users SET currency=?, balance=?, curr_set=1 WHERE user_id=?", (new_curr, current_bal, user_id))
         conn.commit()
         safe_answer(f"✅ Валюта: {new_curr}")
 
