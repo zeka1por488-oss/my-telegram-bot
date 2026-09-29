@@ -37,7 +37,7 @@ REQUIRED_CHANNEL = "@nazarowshop"
 # --- TON ---
 TON_WALLET = os.environ.get("TON_WALLET", "UQC1PIFE4zI6qZmOxn72gCyQWWSq1Uax4kgeOGnTdICT-cC-")
 # Курс: сколько грн стоит 1 TON. ОБЯЗАТЕЛЬНО поставьте актуальный (можно через переменную TON_RATE_UAH)
-TON_RATE_UAH = float(os.environ.get("TON_RATE_UAH", "55"))
+TON_RATE_UAH = float(os.environ.get("TON_RATE_UAH", "65"))
 
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "4400005572759295")
 CARD_HOLDER = "А-Банк / Карта UAH"
@@ -333,16 +333,16 @@ def convert_currency(amount, from_curr, to_curr):
     if from_curr == "TON":
         amount_in_stars = amount * TON_RATE_UAH / 0.75
     elif from_curr == "UAH":
-        amount_in_stars = amount / 0.75
+        amount_in_stars = amount / 0.83
     elif from_curr == "RUB":
-        amount_in_stars = amount / 2.0
+        amount_in_stars = amount / 1.65
         
     if to_curr == "STARS":
         return round(amount_in_stars, 1)
     elif to_curr == "UAH":
         return round(amount_in_stars * 0.75, 2)
     elif to_curr == "RUB":
-        return round(amount_in_stars * 2.0, 2)
+        return round(amount_in_stars * 1.65, 2)
     
     return amount
 
